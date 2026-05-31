@@ -64,6 +64,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import DangerConfirmDialog from "@/components/editor/DangerConfirmDialog.vue";
 import ImagePreviewDialog from "@/components/grid/ImagePreviewDialog.vue";
 import TemporalCellEditor from "@/components/grid/TemporalCellEditor.vue";
+import CanvasGrid from "@/components/grid/canvas/CanvasGrid.vue";
 import type { QueryResult, ColumnInfo, DatabaseType, ForeignKeyInfo, IndexInfo, TriggerInfo } from "@/types/database";
 import * as api from "@/lib/api";
 import { createColumnDrafts } from "@/lib/tableStructureEditorState";
@@ -224,6 +225,25 @@ const props = defineProps<{
 const dataGridTraceId = uuid().slice(0, 8);
 const dataGridCreatedAt = performance.now();
 const dataGridElapsed = () => `${Math.round(performance.now() - dataGridCreatedAt)}ms`;
+
+// Canvas rendering mode — persisted across remounts via localStorage
+const canvasMode = ref(localStorage.getItem("dbx-canvas-mode") === "1");
+const canvasGridRef = ref<InstanceType<typeof CanvasGrid>>();
+
+function toggleCanvasMode() {
+  canvasMode.value = !canvasMode.value;
+  localStorage.setItem("dbx-canvas-mode", canvasMode.value ? "1" : "0");
+}
+
+// Sync DOM column header horizontal scroll with Canvas grid
+watch(
+  () => canvasGridRef.value?.scrollLeft,
+  (left) => {
+    if (left != null && headerRef.value) {
+      headerRef.value.scrollLeft = left;
+    }
+  },
+);
 
 const emit = defineEmits<{
   reload: [sql?: string, searchText?: string, whereInput?: string, orderBy?: string, limit?: number, offset?: number];
@@ -1495,13 +1515,20 @@ function scrollToTableInfoColumn(columnName: string) {
 }
 
 // --- Column resize composable ---
-const { initColumnWidths, onResizeStart, autoFitColumn, renderedColumnWidths, columnVars, getIsResizing } =
-  useDataGridColumnResize({
-    columns: visibleColumns,
-    sourceRows: computed(() => props.result.rows),
-    columnIndexes: visibleColumnIndexes,
-    gridRef,
-  });
+const {
+  columnWidths,
+  initColumnWidths,
+  onResizeStart,
+  autoFitColumn,
+  renderedColumnWidths,
+  columnVars,
+  getIsResizing,
+} = useDataGridColumnResize({
+  columns: visibleColumns,
+  sourceRows: computed(() => props.result.rows),
+  columnIndexes: visibleColumnIndexes,
+  gridRef,
+});
 const gridStyle = computed(() => ({
   ...columnVars.value,
   "--header-total-w": dataGridHeaderContentWidth("var(--total-w)", gridScrollbarGutter.value),
@@ -3915,6 +3942,72 @@ function onRowContext(rowId: number, rowIndex: number) {
   void prefetchCopyStatements();
 }
 
+function onCanvasCellClick(
+  displayRow: number,
+  visibleCol: number,
+  rowId: number,
+  e: { shiftKey: boolean; metaKey: boolean },
+) {
+  const ev = {
+    button: 0,
+    shiftKey: e.shiftKey,
+    metaKey: e.metaKey,
+    ctrlKey: e.metaKey,
+    preventDefault: () => {},
+  } as MouseEvent;
+  handleDataCellMousedown(displayRow, visibleCol, rowId, ev);
+}
+
+function onCanvasHeaderClick(col: number, shiftKey: boolean) {
+  selectColumn(col, { shiftKey } as MouseEvent);
+}
+
+function onCanvasEditCommit(displayRow: number, col: number, value: string) {
+  const item = displayItems.value[displayRow];
+  if (!item) return;
+  const rowId = item.id;
+  const sourceIndex = item.sourceIndex ?? rowId;
+  const oldVal = props.result.rows[sourceIndex]?.[col] ?? null;
+  if (String(oldVal ?? "") === value) return;
+
+  const newVal = value === "" ? null : coerceCellValue(value, oldVal);
+  if (!dirtyRows.value.has(rowId)) {
+    dirtyRows.value.set(rowId, new Map());
+  }
+  dirtyRows.value.get(rowId)!.set(col, newVal);
+}
+
+function onCanvasDoubleClick(displayRow: number, visibleCol: number) {
+  const item = displayItems.value[displayRow];
+  if (item && canEditCellItem(item, visibleCol)) startEdit(item.id, visibleCol);
+}
+
+function onCanvasContextMenu(
+  row: number | null,
+  col: number | null,
+  _clientX: number,
+  _clientY: number,
+  isHeader: boolean,
+) {
+  if (isHeader && col !== null) {
+    onHeaderContext(props.result.columns[col] ?? "", col);
+    return;
+  }
+  if (row !== null && col !== null && col >= 0) {
+    const item = displayItems.value[row];
+    if (item) {
+      onCellContext(item.id, row, col, col);
+    }
+    return;
+  }
+  if (row !== null) {
+    const item = displayItems.value[row];
+    if (item) {
+      onRowContext(item.id, row);
+    }
+  }
+}
+
 async function prefetchCopyStatements() {
   await prefetchRowAsInsertStatement(false);
   if (canCopyRowAsInsertWithoutPrimaryKeys.value) {
@@ -4958,6 +5051,16 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                   {{ t(saveActionMode.secondaryActionKey) }}
                 </Button>
               </template>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-5 text-xs px-1.5 shrink-0"
+                :class="canvasMode ? 'text-primary' : ''"
+                @click="toggleCanvasMode()"
+              >
+                <SquareDashed class="w-3 h-3 mr-1" />
+                Canvas
+              </Button>
             </div>
           </div>
         </div>
@@ -5217,7 +5320,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
               </RecycleScroller>
             </div>
             <template v-else>
-              <!-- Sticky header -->
+              <!-- Sticky header (always DOM for sort/filter actions) -->
               <div
                 ref="headerRef"
                 class="shrink-0 bg-[rgb(239_239_239)] dark:bg-muted/60 z-10 border-y border-border overflow-hidden"
@@ -5730,148 +5833,174 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                 </div>
               </div>
 
-              <div
-                v-if="!hasVisibleRows"
-                class="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground"
-              >
-                <component
-                  :is="hasActiveFilter ? SearchX : Inbox"
-                  class="h-8 w-8 text-muted-foreground/50"
-                  aria-hidden="true"
-                />
-                <div class="space-y-1">
-                  <div class="text-sm font-medium text-foreground">{{ emptyTitle }}</div>
-                  <div class="text-xs">{{ emptyDescription }}</div>
-                </div>
-              </div>
-
-              <!-- Virtual scrolled rows -->
-              <RecycleScroller
-                v-else
-                ref="scrollerRef"
-                class="data-grid-scroller flex-1 overflow-x-auto overscroll-none"
-                :class="{ 'is-scrolling': isScrolling }"
-                :items="displayItems"
-                :item-size="26"
-                :buffer="600"
-                :skip-hover="true"
-                key-field="id"
-                @scroll="onScrollerScroll"
-              >
-                <template #default="{ item }">
-                  <div
-                    class="flex text-xs border-b border-border"
-                    :class="{
-                      'bg-destructive/5 opacity-70': item.isDeleted,
-                      'bg-primary/5': item.isNew && !isRowActive(item.displayIndex),
-                      'bg-muted/30':
-                        !item.isNew &&
-                        !item.isDeleted &&
-                        !isRowActive(item.displayIndex) &&
-                        item.displayIndex % 2 === 1,
-                      'active-row': isRowActive(item.displayIndex) && !item.isDeleted,
-                    }"
-                    :style="{ height: '26px', width: 'var(--total-w)' }"
-                    :data-row-index="item.displayIndex"
-                  >
-                    <div
-                      class="data-grid-row-number shrink-0 px-2 py-1 border-r border-border text-center select-none cursor-default hover:bg-accent/50 sticky left-0 z-10 bg-[rgb(255_255_255)] dark:bg-[rgb(15_15_15)]"
-                      :class="[
-                        rowNumberStatusClass(item),
-                        {
-                          'text-primary font-semibold !bg-primary/25':
-                            isRowSelected(item.id) &&
-                            item.status !== 'new' &&
-                            item.status !== 'edited' &&
-                            item.status !== 'deleted',
-                        },
-                      ]"
-                      :style="{ width: 'var(--row-num-w)' }"
-                      @click="handleRowClick(item.displayIndex, item.id, $event)"
-                      @dblclick.stop="toggleTranspose(item.displayIndex)"
-                      @contextmenu="onRowContext(item.id, item.displayIndex)"
-                    >
-                      {{ item.displayIndex + 1 }}
-                    </div>
-                    <div class="shrink-0" :style="{ width: `${horizontalColumnWindow.beforeWidth}px` }" />
-                    <div
-                      v-for="col in renderedGridColumns"
-                      :key="col.actualColIdx"
-                      class="group/cell shrink-0 px-3 py-1 border-r border-border whitespace-nowrap overflow-hidden text-ellipsis relative select-none"
-                      :style="renderedColumnStyle(col.visibleColIdx)"
-                      :class="{
-                        'text-muted-foreground italic': isNull(item.data[col.actualColIdx]),
-                        'bg-yellow-500/10 cell-dirty': item.isDirtyCol[col.actualColIdx],
-                        'cell-selected':
-                          cellIsSelected(item.displayIndex, col.visibleColIdx) && !item.isDirtyCol[col.actualColIdx],
-                        'cell-selected-dirty':
-                          cellIsSelected(item.displayIndex, col.visibleColIdx) && item.isDirtyCol[col.actualColIdx],
-                        'row-cell-selected':
-                          rowCellsUseSelectionVisual(item.id) &&
-                          !cellIsSelected(item.displayIndex, col.visibleColIdx) &&
-                          !item.isDirtyCol[col.actualColIdx],
-                        'row-cell-selected-dirty':
-                          rowCellsUseSelectionVisual(item.id) &&
-                          !cellIsSelected(item.displayIndex, col.visibleColIdx) &&
-                          item.isDirtyCol[col.actualColIdx],
-                        'bg-yellow-200/60 dark:bg-yellow-500/20': cellIsSearchMatch(
-                          item.displayIndex,
-                          col.actualColIdx,
-                        ),
-                        'ring-2 ring-inset ring-yellow-500 bg-yellow-300/60 dark:bg-yellow-500/40': cellIsCurrentMatch(
-                          item.displayIndex,
-                          col.actualColIdx,
-                        ),
-                        'tabular-nums': typeof item.data[col.actualColIdx] === 'number',
-                        'cursor-text hover:bg-accent/50': !isScrolling && canEditCellItem(item, col.actualColIdx),
-                        'line-through': item.isDeleted,
-                      }"
-                      @mousedown="handleDataCellMousedown(item.displayIndex, col.visibleColIdx, item.id, $event)"
-                      @mouseenter="onCellMouseenter(item.displayIndex, col.visibleColIdx, col.actualColIdx)"
-                      @mouseleave="onCellMouseleave(item.displayIndex, col.actualColIdx)"
-                      @dblclick="canEditCellItem(item, col.actualColIdx) && startEdit(item.id, col.actualColIdx)"
-                      :data-visible-col-index="col.visibleColIdx"
-                      @contextmenu="onCellContext(item.id, item.displayIndex, col.actualColIdx, col.visibleColIdx)"
-                    >
-                      <template v-if="editingCell?.rowId === item.id && editingCell?.col === col.actualColIdx">
-                        <TemporalCellEditor
-                          v-if="temporalEditorKindForColumn(col.actualColIdx)"
-                          v-model="editValue"
-                          :kind="temporalEditorKindForColumn(col.actualColIdx)!"
-                          @cancel="cancelEdit"
-                          @commit="commitGridEdit"
-                        />
-                        <input
-                          v-else
-                          v-model="editValue"
-                          autocapitalize="off"
-                          autocorrect="off"
-                          spellcheck="false"
-                          class="cell-edit-input absolute inset-0 bg-background border-2 border-primary px-2 py-0.5 text-xs outline-none z-10"
-                          @blur="commitEdit"
-                          @click.stop
-                          @keydown.stop="onEditKeydown"
-                        />
-                      </template>
-                      <template v-else>
-                        {{ formatCellCached(item.data[col.actualColIdx], col.actualColIdx) }}
-                        <button
-                          v-if="cellDetailButtonVisible(item.displayIndex, col.actualColIdx)"
-                          class="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded bg-background/90 text-muted-foreground shadow-sm ring-1 ring-border hover:text-foreground"
-                          :title="t('grid.cellDetails')"
-                          @mousedown.stop
-                          @click.stop="
-                            showCellDetailsForVisibleCell(item.displayIndex, col.visibleColIdx, col.actualColIdx)
-                          "
-                        >
-                          <Info class="h-3 w-3" />
-                        </button>
-                      </template>
-                    </div>
-                    <div class="shrink-0" :style="{ width: `${horizontalColumnWindow.afterWidth}px` }" />
+              <CanvasGrid
+                v-if="canvasMode"
+                ref="canvasGridRef"
+                :columns="result.columns"
+                :rows="result.rows"
+                :display-items="displayItems"
+                :column-widths="renderedColumnWidths"
+                :is-dark="isDark"
+                :selected-range="selectedRange"
+                :has-column-selection="selection.hasColumnSelection.value"
+                :selected-column-indexes="selection.selectedColumnIndexes.value"
+                :search-matches="searchMatches"
+                :current-match-index="currentMatchIndex"
+                :editing-cell="editingCell"
+                :format-cell="formatCellCached"
+                @cell-click="onCanvasCellClick"
+                @header-click="onCanvasHeaderClick"
+                @context-menu="onCanvasContextMenu"
+                @double-click="onCanvasDoubleClick"
+                @edit-commit="onCanvasEditCommit"
+                @resize-column="
+                  (colIdx, newW) => {
+                    if (colIdx < columnWidths.length) columnWidths[colIdx] = newW;
+                  }
+                "
+              />
+              <template v-else>
+                <div
+                  v-if="!hasVisibleRows"
+                  class="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground"
+                >
+                  <component
+                    :is="hasActiveFilter ? SearchX : Inbox"
+                    class="h-8 w-8 text-muted-foreground/50"
+                    aria-hidden="true"
+                  />
+                  <div class="space-y-1">
+                    <div class="text-sm font-medium text-foreground">{{ emptyTitle }}</div>
+                    <div class="text-xs">{{ emptyDescription }}</div>
                   </div>
-                </template>
-              </RecycleScroller>
+                </div>
+
+                <!-- Virtual scrolled rows -->
+                <RecycleScroller
+                  v-else
+                  ref="scrollerRef"
+                  class="data-grid-scroller flex-1 overflow-x-auto overscroll-none"
+                  :class="{ 'is-scrolling': isScrolling }"
+                  :items="displayItems"
+                  :item-size="26"
+                  :buffer="600"
+                  :skip-hover="true"
+                  key-field="id"
+                  @scroll="onScrollerScroll"
+                >
+                  <template #default="{ item }">
+                    <div
+                      class="flex text-xs border-b border-border"
+                      :class="{
+                        'bg-destructive/5 opacity-70': item.isDeleted,
+                        'bg-primary/5': item.isNew && !isRowActive(item.displayIndex),
+                        'bg-muted/30':
+                          !item.isNew &&
+                          !item.isDeleted &&
+                          !isRowActive(item.displayIndex) &&
+                          item.displayIndex % 2 === 1,
+                        'active-row': isRowActive(item.displayIndex) && !item.isDeleted,
+                      }"
+                      :style="{ height: '26px', width: 'var(--total-w)' }"
+                      :data-row-index="item.displayIndex"
+                    >
+                      <div
+                        class="data-grid-row-number shrink-0 px-2 py-1 border-r border-border text-center select-none cursor-default hover:bg-accent/50 sticky left-0 z-10 bg-[rgb(255_255_255)] dark:bg-[rgb(15_15_15)]"
+                        :class="[
+                          rowNumberStatusClass(item),
+                          {
+                            'text-primary font-semibold !bg-primary/25':
+                              isRowSelected(item.id) &&
+                              item.status !== 'new' &&
+                              item.status !== 'edited' &&
+                              item.status !== 'deleted',
+                          },
+                        ]"
+                        :style="{ width: 'var(--row-num-w)' }"
+                        @click="handleRowClick(item.displayIndex, item.id, $event)"
+                        @dblclick.stop="toggleTranspose(item.displayIndex)"
+                        @contextmenu="onRowContext(item.id, item.displayIndex)"
+                      >
+                        {{ item.displayIndex + 1 }}
+                      </div>
+                      <div class="shrink-0" :style="{ width: `${horizontalColumnWindow.beforeWidth}px` }" />
+                      <div
+                        v-for="col in renderedGridColumns"
+                        :key="col.actualColIdx"
+                        class="group/cell shrink-0 px-3 py-1 border-r border-border whitespace-nowrap overflow-hidden text-ellipsis relative select-none"
+                        :style="renderedColumnStyle(col.visibleColIdx)"
+                        :class="{
+                          'text-muted-foreground italic': isNull(item.data[col.actualColIdx]),
+                          'bg-yellow-500/10 cell-dirty': item.isDirtyCol[col.actualColIdx],
+                          'cell-selected':
+                            cellIsSelected(item.displayIndex, col.visibleColIdx) && !item.isDirtyCol[col.actualColIdx],
+                          'cell-selected-dirty':
+                            cellIsSelected(item.displayIndex, col.visibleColIdx) && item.isDirtyCol[col.actualColIdx],
+                          'row-cell-selected':
+                            rowCellsUseSelectionVisual(item.id) &&
+                            !cellIsSelected(item.displayIndex, col.visibleColIdx) &&
+                            !item.isDirtyCol[col.actualColIdx],
+                          'row-cell-selected-dirty':
+                            rowCellsUseSelectionVisual(item.id) &&
+                            !cellIsSelected(item.displayIndex, col.visibleColIdx) &&
+                            item.isDirtyCol[col.actualColIdx],
+                          'bg-yellow-200/60 dark:bg-yellow-500/20': cellIsSearchMatch(
+                            item.displayIndex,
+                            col.actualColIdx,
+                          ),
+                          'ring-2 ring-inset ring-yellow-500 bg-yellow-300/60 dark:bg-yellow-500/40':
+                            cellIsCurrentMatch(item.displayIndex, col.actualColIdx),
+                          'tabular-nums': typeof item.data[col.actualColIdx] === 'number',
+                          'cursor-text hover:bg-accent/50': !isScrolling && canEditCellItem(item, col.actualColIdx),
+                          'line-through': item.isDeleted,
+                        }"
+                        @mousedown="handleDataCellMousedown(item.displayIndex, col.visibleColIdx, item.id, $event)"
+                        @mouseenter="onCellMouseenter(item.displayIndex, col.visibleColIdx, col.actualColIdx)"
+                        @mouseleave="onCellMouseleave(item.displayIndex, col.actualColIdx)"
+                        @dblclick="canEditCellItem(item, col.actualColIdx) && startEdit(item.id, col.actualColIdx)"
+                        :data-visible-col-index="col.visibleColIdx"
+                        @contextmenu="onCellContext(item.id, item.displayIndex, col.actualColIdx, col.visibleColIdx)"
+                      >
+                        <template v-if="editingCell?.rowId === item.id && editingCell?.col === col.actualColIdx">
+                          <TemporalCellEditor
+                            v-if="temporalEditorKindForColumn(col.actualColIdx)"
+                            v-model="editValue"
+                            :kind="temporalEditorKindForColumn(col.actualColIdx)!"
+                            @cancel="cancelEdit"
+                            @commit="commitGridEdit"
+                          />
+                          <input
+                            v-else
+                            v-model="editValue"
+                            autocapitalize="off"
+                            autocorrect="off"
+                            spellcheck="false"
+                            class="cell-edit-input absolute inset-0 bg-background border-2 border-primary px-2 py-0.5 text-xs outline-none z-10"
+                            @blur="commitEdit"
+                            @click.stop
+                            @keydown.stop="onEditKeydown"
+                          />
+                        </template>
+                        <template v-else>
+                          {{ formatCellCached(item.data[col.actualColIdx], col.actualColIdx) }}
+                          <button
+                            v-if="cellDetailButtonVisible(item.displayIndex, col.actualColIdx)"
+                            class="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded bg-background/90 text-muted-foreground shadow-sm ring-1 ring-border hover:text-foreground"
+                            :title="t('grid.cellDetails')"
+                            @mousedown.stop
+                            @click.stop="
+                              showCellDetailsForVisibleCell(item.displayIndex, col.visibleColIdx, col.actualColIdx)
+                            "
+                          >
+                            <Info class="h-3 w-3" />
+                          </button>
+                        </template>
+                      </div>
+                      <div class="shrink-0" :style="{ width: `${horizontalColumnWindow.afterWidth}px` }" />
+                    </div>
+                  </template>
+                </RecycleScroller>
+              </template>
               <div v-if="loading" class="absolute inset-0 z-20 bg-background/50 flex items-center justify-center">
                 <div
                   class="flex items-center gap-2 px-3 py-1.5 rounded-md bg-background border shadow-sm text-xs text-muted-foreground"
