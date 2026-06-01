@@ -31,6 +31,7 @@ interface RowItem {
 export interface UseDataGridExportOptions {
   columns: ComputedRef<string[]>;
   displayItems: ComputedRef<RowItem[]>;
+  columnIndexes?: ComputedRef<number[]>;
   sql: ComputedRef<string | undefined>;
   tableMeta: ComputedRef<{ schema?: string; tableName: string; primaryKeys: string[] } | undefined>;
   databaseType: ComputedRef<DatabaseType | undefined>;
@@ -79,6 +80,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
   const {
     columns,
     displayItems,
+    columnIndexes,
     sql,
     tableMeta,
     sourceColumns,
@@ -91,6 +93,19 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
     selectedRowIds,
     hasRowSelection,
   } = options;
+
+  function actualColumnIndex(visibleColumnIndex: number): number {
+    return columnIndexes?.value[visibleColumnIndex] ?? visibleColumnIndex;
+  }
+
+  function visibleRowData(item: RowItem): CellValue[] {
+    const indexes = columnIndexes?.value;
+    return indexes ? indexes.map((index) => item.data[index] ?? null) : item.data;
+  }
+
+  function visibleCellValue(item: RowItem, visibleColumnIndex: number): CellValue {
+    return item.data[actualColumnIndex(visibleColumnIndex)] ?? null;
+  }
 
   async function copyText(text: string) {
     try {
@@ -194,7 +209,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
         tableMeta: tableMeta.value,
         columns: columns.value,
         sourceColumns: sourceColumns.value,
-        rows: rows.map((item) => item.data),
+        rows: rows.map(visibleRowData),
         excludePrimaryKeys,
       });
       const latest = insertCopyCache(excludePrimaryKeys);
@@ -265,7 +280,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
         tableMeta: tableMeta.value,
         columns: columns.value,
         sourceColumns: sourceColumns.value,
-        rows: rows.map((item) => item.data),
+        rows: rows.map(visibleRowData),
       });
       const latest = copyRowUpdateCache.value;
       if (latest.key !== key) return;
@@ -322,14 +337,14 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
 
   async function copySelectedRowsTsv() {
     if (!hasRowSelection.value || selectedRowIds.value.size === 0) return;
-    const rows = displayItems.value.filter((item) => selectedRowIds.value.has(item.id)).map((item) => item.data);
+    const rows = displayItems.value.filter((item) => selectedRowIds.value.has(item.id)).map(visibleRowData);
     await copyText(formatSelectionAsTsv({ columns: columns.value, rows }));
   }
 
   function rowToJsonObject(item: RowItem): Record<string, unknown> {
     const obj: Record<string, unknown> = {};
     columns.value.forEach((col, i) => {
-      obj[col] = item.data[i];
+      obj[col] = visibleCellValue(item, i);
     });
     return obj;
   }
@@ -344,7 +359,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
   async function copyCell() {
     if (!contextCell.value || contextCell.value.col < 0) return;
     const item = getRowItem(contextCell.value.rowId);
-    const val = item?.data[contextCell.value.col] ?? null;
+    const val = item ? visibleCellValue(item, contextCell.value.col) : null;
     await copyText(displayCellValue(val));
   }
 
@@ -409,7 +424,13 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
 
   async function copyAll() {
     const header = columns.value.join("\t");
-    const body = displayItems.value.map((item) => item.data.map((c) => displayCellValue(c)).join("\t")).join("\n");
+    const body = displayItems.value
+      .map((item) =>
+        visibleRowData(item)
+          .map((c) => displayCellValue(c))
+          .join("\t"),
+      )
+      .join("\n");
     await copyText(`${header}\n${body}`);
   }
 
@@ -427,7 +448,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
   async function exportCsv(rowIds?: number[]) {
     await runExclusiveExport(async () => {
       try {
-        const rows = rowsToExport(rowIds).map((item) => item.data.map((c) => displayCellValue(c)));
+        const rows = rowsToExport(rowIds).map((item) => visibleRowData(item).map((c) => displayCellValue(c)));
         let outputPath = "export.csv";
         if (isTauriRuntime()) {
           const { save } = await import("@tauri-apps/plugin-dialog");
@@ -459,11 +480,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
           if (!path) return;
           outputPath = path as string;
         }
-        await api.exportQueryResultJson(
-          outputPath,
-          columns.value,
-          rowsToExport(rowIds).map((item) => item.data),
-        );
+        await api.exportQueryResultJson(outputPath, columns.value, rowsToExport(rowIds).map(visibleRowData));
         toast(t("grid.exported"));
       } catch (e: any) {
         toast(t("grid.exportFailed", { message: e?.message || String(e) }), 5000);
@@ -484,11 +501,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
           if (!path) return;
           outputPath = path as string;
         }
-        await api.exportQueryResultMarkdown(
-          outputPath,
-          columns.value,
-          rowsToExport(rowIds).map((item) => item.data),
-        );
+        await api.exportQueryResultMarkdown(outputPath, columns.value, rowsToExport(rowIds).map(visibleRowData));
         toast(t("grid.exported"));
       } catch (e: any) {
         toast(t("grid.exportFailed", { message: e?.message || String(e) }), 5000);
@@ -513,7 +526,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
           outputPath,
           tableMeta.value?.tableName || "Export",
           columns.value,
-          rowsToExport(rowIds).map((item) => item.data),
+          rowsToExport(rowIds).map(visibleRowData),
         );
         toast(t("grid.exported"));
       } catch (e: any) {

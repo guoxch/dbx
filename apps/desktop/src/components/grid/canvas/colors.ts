@@ -91,8 +91,8 @@ export function resolveGridColors(isDark: boolean): GridColors {
     border: read("--border"),
     dirty: "color-mix(in oklab, oklch(0.8 0.15 85) 10%, transparent)", // bg-yellow-500/10
     hover: mixColor(accent, 50), // matches hover:bg-accent/50
-    searchMatch: "rgba(250,204,21,0.3)", // bg-yellow-200/60-ish
-    searchMatchCurrent: "rgba(250,204,21,0.55)", // current match — more solid
+    searchMatch: isDark ? "rgba(234,179,8,0.2)" : "rgba(254,240,138,0.6)",
+    searchMatchCurrent: isDark ? "rgba(234,179,8,0.4)" : "rgba(253,224,71,0.6)",
     newRow: mixColor(primary, 5), // matches bg-primary/5
     deletedRow: mixColor(destructive, 5), // matches bg-destructive/5
     headerBg: read("--muted"),

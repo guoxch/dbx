@@ -40,15 +40,16 @@ export interface CanvasEventHandlers {
 }
 
 export interface SetupCanvasEventsOptions {
-  canvas: HTMLCanvasElement;
+  canvas: HTMLElement;
   hitTestOptions: () => HitTestOptions;
   handlers: CanvasEventHandlers;
   getResizing: () => boolean;
   setResizing: (v: boolean) => void;
+  cellCursor?: (row: number, col: number) => string | null | undefined;
 }
 
 export function setupCanvasEvents(options: SetupCanvasEventsOptions) {
-  const { canvas, hitTestOptions, handlers, getResizing, setResizing } = options;
+  const { canvas, hitTestOptions, handlers, getResizing, setResizing, cellCursor } = options;
 
   function getHit(e: MouseEvent) {
     const rect = canvas.getBoundingClientRect();
@@ -61,6 +62,9 @@ export function setupCanvasEvents(options: SetupCanvasEventsOptions) {
     const hit = getHit(e);
     if (hit.isResizeHandle) return "col-resize";
     if (getResizing()) return "col-resize";
+    if (hit.rowIndex !== null && hit.colIndex !== null) {
+      return cellCursor?.(hit.rowIndex, hit.colIndex) ?? "default";
+    }
     return "default";
   }
 
@@ -120,7 +124,9 @@ export function setupCanvasEvents(options: SetupCanvasEventsOptions) {
     }
   });
 
-  canvas.addEventListener("mouseleave", () => {
+  canvas.addEventListener("mouseleave", (e) => {
+    const nextTarget = e.relatedTarget as Element | null;
+    if (nextTarget?.closest("[data-canvas-cell-detail-button]")) return;
     if (!getResizing()) {
       handlers.onHover(null, null);
     }

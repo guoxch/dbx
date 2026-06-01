@@ -4,7 +4,7 @@ const globalDdlOpen = ref(false);
 </script>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, watch, type Component } from "vue";
+import { computed, markRaw, nextTick, onUnmounted, toRaw, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   ArrowUp,
@@ -234,16 +234,6 @@ function toggleCanvasMode() {
   canvasMode.value = !canvasMode.value;
   localStorage.setItem("dbx-canvas-mode", canvasMode.value ? "1" : "0");
 }
-
-// Sync DOM column header horizontal scroll with Canvas grid
-watch(
-  () => canvasGridRef.value?.scrollLeft,
-  (left) => {
-    if (left != null && headerRef.value) {
-      headerRef.value.scrollLeft = left;
-    }
-  },
-);
 
 const emit = defineEmits<{
   reload: [sql?: string, searchText?: string, whereInput?: string, orderBy?: string, limit?: number, offset?: number];
@@ -559,21 +549,6 @@ function rowMatchesLocalColumnFilters(data: CellValue[]): boolean {
     selected.has(localFilterKey(data[Number(columnIndex)] ?? null)),
   );
 }
-
-const localFilteredRows = computed(() => {
-  const rows = props.result.rows;
-  const indices: number[] = [];
-  if (!hasLocalColumnFilters.value) {
-    for (let i = 0; i < rows.length; i++) indices.push(i);
-    return indices;
-  }
-  for (let i = 0; i < rows.length; i++) {
-    if (rowMatchesLocalColumnFilters(rowDataWithChanges(rows[i], i))) {
-      indices.push(i);
-    }
-  }
-  return indices;
-});
 
 function buildLocalFilterOptions(columnIndex: number) {
   const byKey = new Map<string, { key: string; label: string; count: number; value: CellValue }>();
@@ -1562,11 +1537,18 @@ interface RenderedGridColumn {
   name: string;
 }
 
-const horizontalColumnWindow = computed(() => {
-  const widths = renderedColumnWidths.value;
-  const totalColumns = visibleColumnIndexes.value.length;
+interface GridColumnWindow {
+  start: number;
+  end: number;
+  beforeWidth: number;
+  afterWidth: number;
+}
+
+const EMPTY_GRID_COLUMN_WINDOW: GridColumnWindow = { start: 0, end: 0, beforeWidth: 0, afterWidth: 0 };
+
+function calculateGridColumnWindow(widths: number[], totalColumns: number): GridColumnWindow {
   if (totalColumns === 0 || widths.length === 0) {
-    return { start: 0, end: 0, beforeWidth: 0, afterWidth: 0 };
+    return EMPTY_GRID_COLUMN_WINDOW;
   }
 
   const viewportStart = Math.max(
@@ -1599,10 +1581,9 @@ const horizontalColumnWindow = computed(() => {
     beforeWidth: offset,
     afterWidth: Math.max(0, columnsWidth - visibleWidth),
   };
-});
+}
 
-const renderedGridColumns = computed<RenderedGridColumn[]>(() => {
-  const window = horizontalColumnWindow.value;
+function renderedColumnsForWindow(window: GridColumnWindow): RenderedGridColumn[] {
   const columns: RenderedGridColumn[] = [];
   for (let visibleColIdx = window.start; visibleColIdx < window.end; visibleColIdx++) {
     const actualColIdx = visibleColumnIndexes.value[visibleColIdx];
@@ -1614,7 +1595,21 @@ const renderedGridColumns = computed<RenderedGridColumn[]>(() => {
     });
   }
   return columns;
+}
+
+const headerColumnWindow = computed(() => {
+  return calculateGridColumnWindow(renderedColumnWidths.value, visibleColumnIndexes.value.length);
 });
+
+const domBodyColumnWindow = computed(() => {
+  if (canvasMode.value) {
+    return EMPTY_GRID_COLUMN_WINDOW;
+  }
+  return calculateGridColumnWindow(renderedColumnWidths.value, visibleColumnIndexes.value.length);
+});
+
+const renderedHeaderColumns = computed<RenderedGridColumn[]>(() => renderedColumnsForWindow(headerColumnWindow.value));
+const renderedBodyColumns = computed<RenderedGridColumn[]>(() => renderedColumnsForWindow(domBodyColumnWindow.value));
 
 function renderedColumnStyle(visibleColIdx: number) {
   return { width: `var(--col-w-${visibleColIdx})` };
@@ -1646,7 +1641,7 @@ function onScrollerScroll(e: Event) {
 }
 
 watch(isScrolling, (scrolling) => {
-  if (scrolling) hoveredDetailCell.value = null;
+  if (scrolling && !canvasMode.value) hoveredDetailCell.value = null;
 });
 
 initColumnWidths();
@@ -1654,6 +1649,7 @@ watch(() => visibleColumns.value.length, initColumnWidths);
 watch(
   () => [visibleColumnCount.value, renderedColumnWidths.value.length],
   () => {
+    if (canvasMode.value) return;
     nextTick(() => {
       const scrollerEl = gridRef.value?.querySelector<HTMLElement>(".data-grid-scroller");
       if (scrollerEl) updateGridHorizontalViewport(scrollerEl);
@@ -1853,6 +1849,12 @@ interface RowItem {
   status: RowStatus;
 }
 
+const CLEAN_DIRTY_COLUMNS: boolean[] = [];
+
+function cleanRowData(row: CellValue[]): CellValue[] {
+  return markRaw(toRaw(row));
+}
+
 const editor = useDataGridEditor({
   result: computed(() => props.result),
   editable: computed(() => props.editable),
@@ -1998,48 +2000,53 @@ function addRow() {
   focusAppendedTransposeRecord();
 }
 
-const sortedRows = computed(() => {
-  let indices = localFilteredRows.value;
-  const q = deferredClientSearchText.value;
-  if (q) {
-    const rows = props.result.rows;
-    indices = indices.filter((sourceIndex) => {
-      const data = rows[sourceIndex];
-      return data.some(
-        (cell, columnIndex) => cell !== null && formatCellCached(cell, columnIndex).toLowerCase().includes(q),
-      );
-    });
-  }
-  return indices;
-});
+function rowMatchesClientSearch(row: CellValue[], sourceIndex: number, query: string): boolean {
+  if (!query) return true;
+  const data = rowDataWithChanges(row, sourceIndex);
+  return data.some(
+    (cell, columnIndex) => cell !== null && formatCellCached(cell, columnIndex).toLowerCase().includes(query),
+  );
+}
 
 const displayItems = computed<RowItem[]>(() => {
-  const cols = props.result.columns;
   const rows = props.result.rows;
-  const items: Omit<RowItem, "displayIndex">[] = sortedRows.value.map((sourceIndex) => {
+  const items: RowItem[] = [];
+  const hasLocalFilters = hasLocalColumnFilters.value;
+  const q = deferredClientSearchText.value;
+  let displayIndex = 0;
+
+  for (let sourceIndex = 0; sourceIndex < rows.length; sourceIndex++) {
     const row = rows[sourceIndex];
+    if (hasLocalFilters && !rowMatchesLocalColumnFilters(rowDataWithChanges(row, sourceIndex))) continue;
+    if (!rowMatchesClientSearch(row, sourceIndex, q)) continue;
+
     const dirty = dirtyRows.value.get(sourceIndex);
-    const data = rowDataWithChanges(row, sourceIndex);
-    const isDirtyCol = row.map((_, colIdx) => dirty?.has(colIdx) ?? false);
+    const data = dirty ? rowDataWithChanges(row, sourceIndex) : cleanRowData(row);
+    const isDirtyCol = dirty ? row.map((_, colIdx) => dirty.has(colIdx)) : CLEAN_DIRTY_COLUMNS;
     const isDeleted = deletedRows.value.has(sourceIndex);
     const status: RowStatus = isDeleted ? "deleted" : dirty ? "edited" : "clean";
-    return { id: sourceIndex, sourceIndex, data, isNew: false, isDeleted, isDirtyCol, status };
-  });
+    if (!matchesRowStatusFilter(status, rowStatusFilter.value)) continue;
+    items.push({ id: sourceIndex, displayIndex, sourceIndex, data, isNew: false, isDeleted, isDirtyCol, status });
+    displayIndex++;
+  }
+
   newRows.value.forEach((row, i) => {
     if (!rowMatchesLocalColumnFilters(row)) return;
+    const status: RowStatus = "new";
+    if (!matchesRowStatusFilter(status, rowStatusFilter.value)) return;
     items.push({
       id: -(i + 1),
+      displayIndex,
       newIndex: i,
       data: row,
       isNew: true,
       isDeleted: false,
-      isDirtyCol: cols.map(() => false),
-      status: "new",
+      isDirtyCol: CLEAN_DIRTY_COLUMNS,
+      status,
     });
+    displayIndex++;
   });
-  return items
-    .filter((item) => matchesRowStatusFilter(item.status, rowStatusFilter.value))
-    .map((item, displayIndex) => ({ ...item, displayIndex }));
+  return items;
 });
 
 watch(
@@ -2054,13 +2061,17 @@ watch(
       elapsedSinceSetup: dataGridElapsed(),
     });
     nextTick(() => {
-      const scrollerEl = gridRef.value?.querySelector<HTMLElement>(".data-grid-scroller");
-      if (scrollerEl) {
-        updateGridScrollbarGutter(scrollerEl);
-        updateGridHorizontalViewport(scrollerEl);
+      if (!canvasMode.value) {
+        const scrollerEl = gridRef.value?.querySelector<HTMLElement>(".data-grid-scroller");
+        if (scrollerEl) {
+          updateGridScrollbarGutter(scrollerEl);
+          updateGridHorizontalViewport(scrollerEl);
+        }
       }
       requestAnimationFrame(() => {
-        const renderedRows = gridRef.value?.querySelectorAll(".vue-recycle-scroller__item-view").length;
+        const renderedRows = canvasMode.value
+          ? undefined
+          : gridRef.value?.querySelectorAll(".vue-recycle-scroller__item-view").length;
         console.info("[DBX][DataGrid:display-items:first-frame]", {
           traceId: dataGridTraceId,
           cacheKey: props.cacheKey,
@@ -2145,21 +2156,6 @@ function getRowItem(rowId: number): RowItem | undefined {
   return displayItems.value.find((item) => item.id === rowId);
 }
 
-function visibleRowData(row: CellValue[]): CellValue[] {
-  return visibleColumnIndexes.value.map((index) => row[index]);
-}
-
-function visibleDirtyColumns(row: boolean[]): boolean[] {
-  return visibleColumnIndexes.value.map((index) => row[index] ?? false);
-}
-
-const visibleDisplayItems = computed<RowItem[]>(() =>
-  displayItems.value.map((item) => ({
-    ...item,
-    data: visibleRowData(item.data),
-    isDirtyCol: visibleDirtyColumns(item.isDirtyCol),
-  })),
-);
 const exportContextCell = computed(() => {
   if (!contextCell.value) return null;
   const visibleCol = visibleColumnIndexes.value.indexOf(contextCell.value.col);
@@ -2187,7 +2183,8 @@ const errorMessage = computed(() => (isErrorResult.value ? String(props.result.r
 // --- Selection composable ---
 const selection = useDataGridSelection({
   columns: visibleColumns,
-  displayItems: visibleDisplayItems,
+  displayItems,
+  columnIndexes: visibleColumnIndexes,
   editingCell,
   showTranspose,
   transposeRowIndex,
@@ -2952,7 +2949,8 @@ const {
   copySql,
 } = useDataGridExport({
   columns: visibleColumns,
-  displayItems: visibleDisplayItems,
+  displayItems,
+  columnIndexes: visibleColumnIndexes,
   sql: computed(() => props.sql),
   tableMeta: computed(() => (props.tableMeta ? { ...props.tableMeta } : undefined)),
   databaseType: computed(() => props.databaseType),
@@ -2961,7 +2959,7 @@ const {
   selectedCells,
   selectedRange,
   contextCell: exportContextCell,
-  getRowItem: (rowId: number) => visibleDisplayItems.value.find((item) => item.id === rowId),
+  getRowItem,
   selectedRowIds,
   hasRowSelection,
 });
@@ -3561,7 +3559,7 @@ function copyColumnDetailFieldValue(field: DataGridCellDetail) {
 const TRANSPOSE_RECORD_DEFAULT_WIDTH = 168;
 const TRANSPOSE_RECORD_MIN_WIDTH = 96;
 const TRANSPOSE_PINNED_MIN_WIDTH = 104;
-const transposeRecordWidths = ref<number[]>([]);
+const transposeRecordWidths = ref<Map<number, number>>(new Map());
 
 function calcTransposeRecordWidth(recordIndex: number): number {
   const item = displayItems.value[recordIndex];
@@ -3579,29 +3577,26 @@ function calcTransposeRecordWidth(recordIndex: number): number {
 }
 
 function getTransposeRecordWidth(recordIndex: number): number {
-  return transposeRecordWidths.value[recordIndex] ?? TRANSPOSE_RECORD_DEFAULT_WIDTH;
-}
-
-function ensureTransposeRecordWidths(count: number) {
-  if (transposeRecordWidths.value.length !== count) {
-    const prev = transposeRecordWidths.value;
-    const next = new Array(count);
-    for (let i = 0; i < count; i++) {
-      next[i] = i < prev.length ? prev[i] : calcTransposeRecordWidth(i);
-    }
-    transposeRecordWidths.value = next;
-  }
+  return transposeRecordWidths.value.get(recordIndex) ?? TRANSPOSE_RECORD_DEFAULT_WIDTH;
 }
 
 function estimatedTransposeRecordWidth(): number {
   const widths = transposeRecordWidths.value;
-  if (widths.length === 0) return TRANSPOSE_RECORD_DEFAULT_WIDTH;
-  return widths.reduce((sum, w) => sum + w, 0) / widths.length;
+  if (widths.size === 0) return TRANSPOSE_RECORD_DEFAULT_WIDTH;
+  let sum = 0;
+  for (const width of widths.values()) sum += width;
+  return sum / widths.size;
 }
 
 watch(
   () => displayItems.value.length,
-  (count) => ensureTransposeRecordWidths(count),
+  (count) => {
+    const next = new Map<number, number>();
+    for (const [index, width] of transposeRecordWidths.value) {
+      if (index < count) next.set(index, width);
+    }
+    transposeRecordWidths.value = next;
+  },
 );
 const transposePinnedWidthOverride = ref<number | null>(null);
 const transposePinnedWidth = computed(
@@ -3704,12 +3699,11 @@ function onTransposePinnedResizeStart(event: MouseEvent) {
 
 function onTransposeRecordResizeStart(recordIndex: number, event: MouseEvent) {
   event.preventDefault();
-  ensureTransposeRecordWidths(displayItems.value.length);
   const startX = event.clientX;
   const startWidth = getTransposeRecordWidth(recordIndex);
   const onMove = (e: MouseEvent) => {
-    const next = [...transposeRecordWidths.value];
-    next[recordIndex] = Math.max(TRANSPOSE_RECORD_MIN_WIDTH, startWidth + e.clientX - startX);
+    const next = new Map(transposeRecordWidths.value);
+    next.set(recordIndex, Math.max(TRANSPOSE_RECORD_MIN_WIDTH, startWidth + e.clientX - startX));
     transposeRecordWidths.value = next;
     updateTransposeViewport();
   };
@@ -3722,9 +3716,8 @@ function onTransposeRecordResizeStart(recordIndex: number, event: MouseEvent) {
 }
 
 function autoFitTransposeRecord(recordIndex: number) {
-  ensureTransposeRecordWidths(displayItems.value.length);
-  const next = [...transposeRecordWidths.value];
-  next[recordIndex] = calcTransposeRecordWidth(recordIndex);
+  const next = new Map(transposeRecordWidths.value);
+  next.set(recordIndex, calcTransposeRecordWidth(recordIndex));
   transposeRecordWidths.value = next;
 }
 
@@ -3966,20 +3959,39 @@ function onCanvasEditCommit(displayRow: number, col: number, value: string) {
   const item = displayItems.value[displayRow];
   if (!item) return;
   const rowId = item.id;
-  const sourceIndex = item.sourceIndex ?? rowId;
-  const oldVal = props.result.rows[sourceIndex]?.[col] ?? null;
-  if (String(oldVal ?? "") === value) return;
+  const actualCol = actualColumnIndex(col);
 
-  const newVal = value === "" ? null : coerceCellValue(value, oldVal);
-  if (!dirtyRows.value.has(rowId)) {
-    dirtyRows.value.set(rowId, new Map());
+  if (editingCell.value?.rowId === rowId && editingCell.value.col === actualCol) {
+    editValue.value = value;
+    commitEdit();
+    return;
   }
-  dirtyRows.value.get(rowId)!.set(col, newVal);
+
+  applyCellValue(rowId, actualCol, value);
 }
 
 function onCanvasDoubleClick(displayRow: number, visibleCol: number) {
   const item = displayItems.value[displayRow];
-  if (item && canEditCellItem(item, visibleCol)) startEdit(item.id, visibleCol);
+  const actualCol = actualColumnIndex(visibleCol);
+  if (item && canEditCellItem(item, actualCol)) startEdit(item.id, actualCol);
+}
+
+function onCanvasCellDetailClick(displayRow: number, visibleCol: number, actualCol: number) {
+  showCellDetailsForVisibleCell(displayRow, visibleCol, actualCol);
+}
+
+function canvasCellCanEdit(displayRow: number, actualCol: number): boolean {
+  const item = displayItems.value[displayRow];
+  return !!item && canEditCellItem(item, actualCol);
+}
+
+function onCanvasScrollUpdate(scrollLeft: number, _scrollTop: number, viewportWidth: number, scrollbarGutter: number) {
+  gridHorizontalScrollLeft.value = scrollLeft;
+  gridViewportWidth.value = viewportWidth;
+  gridScrollbarGutter.value = scrollbarGutter;
+  if (headerRef.value) {
+    headerRef.value.scrollLeft = scrollLeft;
+  }
 }
 
 function onCanvasContextMenu(
@@ -3996,7 +4008,7 @@ function onCanvasContextMenu(
   if (row !== null && col !== null && col >= 0) {
     const item = displayItems.value[row];
     if (item) {
-      onCellContext(item.id, row, col, col);
+      onCellContext(item.id, row, actualColumnIndex(col), col);
     }
     return;
   }
@@ -5333,8 +5345,8 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                   >
                     #
                   </div>
-                  <div class="shrink-0" :style="{ width: `${horizontalColumnWindow.beforeWidth}px` }" />
-                  <Tooltip v-for="col in renderedGridColumns" :key="`${col.name}-${col.actualColIdx}`">
+                  <div class="shrink-0" :style="{ width: `${headerColumnWindow.beforeWidth}px` }" />
+                  <Tooltip v-for="col in renderedHeaderColumns" :key="`${col.name}-${col.actualColIdx}`">
                     <TooltipTrigger as-child>
                       <div
                         class="shrink-0 px-2 py-1.5 border-r border-border whitespace-nowrap hover:bg-accent/60 select-none relative overflow-hidden"
@@ -5824,7 +5836,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                       </template>
                     </TooltipContent>
                   </Tooltip>
-                  <div class="shrink-0" :style="{ width: `${horizontalColumnWindow.afterWidth}px` }" />
+                  <div class="shrink-0" :style="{ width: `${headerColumnWindow.afterWidth}px` }" />
                   <div
                     v-if="gridScrollbarGutter > 0"
                     class="shrink-0 border-l border-border"
@@ -5836,23 +5848,29 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
               <CanvasGrid
                 v-if="canvasMode"
                 ref="canvasGridRef"
-                :columns="result.columns"
-                :rows="result.rows"
+                :columns="visibleColumns"
                 :display-items="displayItems"
                 :column-widths="renderedColumnWidths"
+                :actual-column-indexes="visibleColumnIndexes"
                 :is-dark="isDark"
                 :selected-range="selectedRange"
                 :has-column-selection="selection.hasColumnSelection.value"
                 :selected-column-indexes="selection.selectedColumnIndexes.value"
+                :selected-row-ids="selectedRowIds"
                 :search-matches="searchMatches"
                 :current-match-index="currentMatchIndex"
                 :editing-cell="editingCell"
                 :format-cell="formatCellCached"
+                :can-edit-cell="canvasCellCanEdit"
+                :cell-detail-title="t('grid.cellDetails')"
                 @cell-click="onCanvasCellClick"
                 @header-click="onCanvasHeaderClick"
                 @context-menu="onCanvasContextMenu"
                 @double-click="onCanvasDoubleClick"
                 @edit-commit="onCanvasEditCommit"
+                @edit-cancel="cancelEdit"
+                @cell-detail-click="onCanvasCellDetailClick"
+                @scroll-update="onCanvasScrollUpdate"
                 @resize-column="
                   (colIdx, newW) => {
                     if (colIdx < columnWidths.length) columnWidths[colIdx] = newW;
@@ -5923,9 +5941,9 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                       >
                         {{ item.displayIndex + 1 }}
                       </div>
-                      <div class="shrink-0" :style="{ width: `${horizontalColumnWindow.beforeWidth}px` }" />
+                      <div class="shrink-0" :style="{ width: `${domBodyColumnWindow.beforeWidth}px` }" />
                       <div
-                        v-for="col in renderedGridColumns"
+                        v-for="col in renderedBodyColumns"
                         :key="col.actualColIdx"
                         class="group/cell shrink-0 px-3 py-1 border-r border-border whitespace-nowrap overflow-hidden text-ellipsis relative select-none"
                         :style="renderedColumnStyle(col.visibleColIdx)"
@@ -5996,7 +6014,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                           </button>
                         </template>
                       </div>
-                      <div class="shrink-0" :style="{ width: `${horizontalColumnWindow.afterWidth}px` }" />
+                      <div class="shrink-0" :style="{ width: `${domBodyColumnWindow.afterWidth}px` }" />
                     </div>
                   </template>
                 </RecycleScroller>

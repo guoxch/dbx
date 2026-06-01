@@ -57,17 +57,28 @@ export function useCanvasGrid(options: CanvasGridOptions = {}): CanvasGridState 
   }
 
   function updateViewport(width: number, height: number) {
-    viewportWidth.value = width;
-    viewportHeight.value = height;
+    const nextWidth = Math.max(0, Math.round(width));
+    const nextHeight = Math.max(0, Math.round(height));
+    viewportWidth.value = nextWidth;
+    viewportHeight.value = nextHeight;
     const c = canvasRef.value;
     if (c) {
-      c.style.width = `${width}px`;
-      c.style.height = `${height}px`;
-      c.width = width * dpr;
-      c.height = height * dpr;
+      c.style.width = `${nextWidth}px`;
+      c.style.height = `${nextHeight}px`;
+      const pixelWidth = Math.max(1, Math.round(nextWidth * dpr));
+      const pixelHeight = Math.max(1, Math.round(nextHeight * dpr));
+      const sizeChanged = c.width !== pixelWidth || c.height !== pixelHeight;
+      if (sizeChanged) {
+        c.width = pixelWidth;
+        c.height = pixelHeight;
+      }
       const context = ctx.value;
-      if (context) {
-        context.scale(dpr, dpr);
+      if (context && sizeChanged) {
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      if (sizeChanged && redrawCallback) {
+        dirty.value = false;
+        redrawCallback();
       }
     }
     scheduleRedraw();

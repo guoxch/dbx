@@ -28,6 +28,7 @@ interface RowItem {
 export interface UseDataGridSelectionOptions {
   columns: ComputedRef<string[]>;
   displayItems: ComputedRef<RowItem[]>;
+  columnIndexes?: ComputedRef<number[]>;
   editingCell: Ref<{ rowId: number; col: number } | null>;
   showTranspose: Ref<boolean>;
   transposeRowIndex: Ref<number | null>;
@@ -35,7 +36,7 @@ export interface UseDataGridSelectionOptions {
 }
 
 export function useDataGridSelection(options: UseDataGridSelectionOptions) {
-  const { columns, displayItems, editingCell, showTranspose, transposeRowIndex, gridRef } = options;
+  const { columns, displayItems, columnIndexes, editingCell, showTranspose, transposeRowIndex, gridRef } = options;
 
   const selectionAnchor = ref<CellPosition | null>(null);
   const selectionFocus = ref<CellPosition | null>(null);
@@ -54,13 +55,31 @@ export function useDataGridSelection(options: UseDataGridSelectionOptions) {
     return normalizeSelectionRange(selectionAnchor.value, selectionFocus.value);
   });
 
-  const visibleSelectionRows = computed(() => displayItems.value.map((item) => item.data));
+  function visibleRowData(row: CellValue[]): CellValue[] {
+    const indexes = columnIndexes?.value;
+    return indexes ? indexes.map((index) => row[index] ?? null) : row;
+  }
+
+  function visibleSelectionRowsForRange(range: CellSelectionRange): CellValue[][] {
+    return displayItems.value.slice(range.startRow, range.endRow + 1).map((item) => visibleRowData(item.data));
+  }
+
+  function visibleSelectionRowsForColumns(): CellValue[][] {
+    return displayItems.value.map((item) => visibleRowData(item.data));
+  }
 
   const selectedCells = computed<SelectionData>(() => {
+    const range = selectedRange.value;
     if (hasColumnSelection.value) {
-      return extractColumnsSelection(columns.value, visibleSelectionRows.value, selectedColumnIndexes.value);
+      return extractColumnsSelection(columns.value, visibleSelectionRowsForColumns(), selectedColumnIndexes.value);
     }
-    return extractSelection(columns.value, visibleSelectionRows.value, selectedRange.value);
+    if (!range) return { columns: [], rows: [] };
+    return extractSelection(columns.value, visibleSelectionRowsForRange(range), {
+      startRow: 0,
+      endRow: range.endRow - range.startRow,
+      startCol: range.startCol,
+      endCol: range.endCol,
+    });
   });
 
   const selectedCellCount = computed(() => selectedCells.value.columns.length * selectedCells.value.rows.length);

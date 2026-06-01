@@ -299,6 +299,7 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
   // --- Row data helpers ---
   function rowDataWithChanges(row: CellValue[], sourceIndex: number): CellValue[] {
     const dirty = dirtyRows.value.get(sourceIndex);
+    if (!dirty) return row;
     return row.map((v, colIdx) => (dirty?.has(colIdx) ? dirty.get(colIdx)! : v));
   }
 

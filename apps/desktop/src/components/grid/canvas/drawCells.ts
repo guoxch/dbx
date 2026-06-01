@@ -2,9 +2,13 @@ import { setGridFont, truncateText, CELL_PADDING_X } from "./textLayout";
 import { type GridColors } from "./colors";
 import { displayCellValue, type CellValue } from "@/lib/cellValue";
 
+export interface DrawCellsRow {
+  data: CellValue[];
+}
+
 export interface DrawCellsOptions {
   ctx: CanvasRenderingContext2D;
-  rows: CellValue[][];
+  rows: readonly DrawCellsRow[];
   columnWidths: number[];
   rowHeight: number;
   headerHeight: number;
@@ -13,6 +17,7 @@ export interface DrawCellsOptions {
   startCol: number;
   endCol: number;
   scrollTop: number;
+  scrollLeft: number;
   xOffset: number;
   colors: GridColors;
   isCellSelected?: (displayRow: number, visibleCol: number) => boolean;
@@ -22,7 +27,9 @@ export interface DrawCellsOptions {
   visibleToSourceCol?: (visibleCol: number) => number;
   rowStatuses?: Map<number, "clean" | "edited" | "deleted" | "new">;
   hoveredRow?: number | null;
+  hoveredCol?: number | null;
   isRowActive?: (displayRow: number) => boolean;
+  isRowSelected?: (displayRow: number) => boolean;
   rowNumWidth?: number;
   /** Format a cell value for display */
   formatValue?: (value: CellValue, columnIndex: number) => string;
@@ -40,6 +47,7 @@ export function drawCells(options: DrawCellsOptions) {
     startCol,
     endCol,
     scrollTop,
+    scrollLeft,
     xOffset,
     colors,
     isCellSelected,
@@ -49,7 +57,9 @@ export function drawCells(options: DrawCellsOptions) {
     visibleToSourceCol,
     rowStatuses,
     hoveredRow,
+    hoveredCol,
     isRowActive,
+    isRowSelected,
     rowNumWidth = 48,
     formatValue,
   } = options;
@@ -61,6 +71,8 @@ export function drawCells(options: DrawCellsOptions) {
   const selectionFill = `color-mix(in oklab, ${colors.primary} 25%, transparent)`;
   const selectionStroke = `color-mix(in oklab, ${colors.primary} 70%, transparent)`;
   const activeRowFill = `color-mix(in oklab, ${colors.primary} 15%, transparent)`;
+  const activeRowNumberFill = `color-mix(in oklab, ${colors.primary} 15%, ${colors.background})`;
+  const selectedRowNumberFill = `color-mix(in oklab, ${colors.primary} 25%, ${colors.background})`;
   const dirtySelectionFill = `color-mix(in oklab, ${colors.dirty} 30%, color-mix(in oklab, ${colors.primary} 18%, transparent))`;
 
   // Set default font once
@@ -76,7 +88,8 @@ export function drawCells(options: DrawCellsOptions) {
     const isDeleted = status === "deleted";
     const isNew = status === "new";
     const isActive = isRowActive?.(rowIdx);
-    const isHovered = hoveredRow === rowIdx;
+    const isHoveredRow = hoveredRow === rowIdx;
+    const rowSelected = isRowSelected?.(rowIdx) ?? false;
 
     // --- Row background ---
     if (isDeleted) {
@@ -95,11 +108,6 @@ export function drawCells(options: DrawCellsOptions) {
       ctx.fillRect(0, y, totalRowWidth, rowHeight);
     }
 
-    if (isHovered && !isActive) {
-      ctx.fillStyle = colors.hover;
-      ctx.fillRect(0, y, totalRowWidth, rowHeight);
-    }
-
     // --- Row number cell background ---
     if (status === "new") {
       ctx.fillStyle = `color-mix(in oklab, rgb(16,185,129) 15%, ${colors.background})`; // bg-emerald-500/15
@@ -112,11 +120,11 @@ export function drawCells(options: DrawCellsOptions) {
     } else {
       ctx.fillStyle = colors.rowNumBg;
     }
-    if (isHovered && !isActive) {
+    if (isHoveredRow && !isActive) {
       ctx.fillStyle = colors.hover;
     }
     if (isActive && status !== "deleted" && status !== "new" && status !== "edited") {
-      ctx.fillStyle = `color-mix(in oklab, ${colors.primary} 25%, transparent)`;
+      ctx.fillStyle = rowSelected ? selectedRowNumberFill : activeRowNumberFill;
     }
     ctx.fillRect(0, y, rowNumWidth, rowHeight);
 
@@ -143,17 +151,18 @@ export function drawCells(options: DrawCellsOptions) {
     ctx.textAlign = "start";
 
     // --- Data cells ---
-    let cellX = rowNumWidth - xOffset;
+    let cellX = rowNumWidth + xOffset - scrollLeft;
     for (let colIdx = startCol; colIdx < endCol; colIdx++) {
       const width = columnWidths[colIdx] ?? 0;
       if (width <= 0) continue;
 
-      const cellValue: CellValue = rowData[colIdx] ?? null;
       const isSelected = isCellSelected?.(rowIdx, colIdx) ?? false;
       const sourceCol = visibleToSourceCol?.(colIdx) ?? colIdx;
+      const cellValue: CellValue = rowData.data[sourceCol] ?? null;
       const dirty = isCellDirty?.(rowIdx, sourceCol) ?? false;
       const searchHit = isSearchMatch?.(rowIdx, sourceCol) ?? false;
       const currentHit = isCurrentMatch?.(rowIdx, sourceCol) ?? false;
+      const isHoveredCell = isHoveredRow && hoveredCol === colIdx;
 
       // Cell background
       if (currentHit) {
@@ -172,11 +181,16 @@ export function drawCells(options: DrawCellsOptions) {
         ctx.fillStyle = colors.dirty;
         ctx.fillRect(cellX, y, width, rowHeight - 1);
       } else if (isSelected) {
-        ctx.fillStyle = selectionFill;
-        ctx.fillRect(cellX, y, width, rowHeight - 1);
+        if (!isActive) {
+          ctx.fillStyle = selectionFill;
+          ctx.fillRect(cellX, y, width, rowHeight - 1);
+        }
         ctx.strokeStyle = selectionStroke;
         ctx.lineWidth = 1;
         ctx.strokeRect(cellX + 0.5, y + 0.5, width - 1, rowHeight - 2);
+      } else if (isHoveredCell) {
+        ctx.fillStyle = colors.hover;
+        ctx.fillRect(cellX, y, width, rowHeight - 1);
       }
 
       // Right border
