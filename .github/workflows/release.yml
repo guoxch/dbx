@@ -49,9 +49,21 @@ jobs:
         if: steps.bump.outputs.changed == 'true'
         shell: bash
         run: |
+          TMP_DIR="$(mktemp -d)"
+          cp plugins/jdbc/pom.xml "$TMP_DIR/pom.xml"
+          cp plugins/jdbc/manifest.json "$TMP_DIR/manifest.json"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git switch -C jdbc-plugin-version-bump origin/main
+          cp "$TMP_DIR/pom.xml" plugins/jdbc/pom.xml
+          cp "$TMP_DIR/manifest.json" plugins/jdbc/manifest.json
           git add plugins/jdbc/pom.xml plugins/jdbc/manifest.json
+          if git diff --cached --quiet; then
+            echo "JDBC plugin version ${{ steps.bump.outputs.new_version }} is already on main."
+            exit 0
+          fi
           git commit -m "chore(jdbc): bump plugin version [skip ci]"
           git push origin HEAD:main
 
