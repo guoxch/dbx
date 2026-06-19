@@ -230,6 +230,12 @@ const activeQueryError = computed(() => {
 });
 const hasQueryOutput = computed(() => !!props.activeTab.result || !!props.activeTab.explainPlan || !!props.activeTab.explainError || props.activeTab.isExecuting === true || props.activeTab.isExplaining === true);
 const tabularResults = computed(() => tabularResultItems(props.activeTab.results));
+const allResultExportSheets = computed(() =>
+  tabularResults.value.map((item) => ({
+    sheetName: t("tabs.resultN", { n: item.n }),
+    result: item.result,
+  })),
+);
 const resultRuns = computed(() => resultRunItems(props.activeTab));
 const activeResultRunItem = computed(() => resultRuns.value.find((run) => run.active));
 const activeResultGridCacheKey = computed(() => resultGridCacheKey(props.activeTab));
@@ -763,6 +769,7 @@ defineExpose({ focusSearch, refreshData, handleModRTarget });
                 :total-row-count-loading="activeTab.resultTotalRowCountLoading"
                 :on-execute-sql="async (sql: string) => emit('executeSql', sql)"
                 :full-export-result="(onProgress?: (info: { rowsExported: number; totalRows: number | null }) => void) => queryStore.fetchTabResultForExport(activeTab.id, onProgress)"
+                :all-export-results="allResultExportSheets"
                 @update:order-by-input="(v: string) => (activeTab.orderByInput = v)"
                 @reload="(sql?: string, searchText?: string, whereInput?: string, orderBy?: string, limit?: number, offset?: number) => emit('reload', sql, searchText, whereInput, orderBy, limit, offset)"
                 @paginate="(offset: number, limit: number, whereInput?: string, orderBy?: string) => emit('paginate', offset, limit, whereInput, orderBy)"

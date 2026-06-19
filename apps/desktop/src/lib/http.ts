@@ -1310,6 +1310,21 @@ export async function exportQueryResultXlsx(filePath: string, sheetName: string 
   URL.revokeObjectURL(url);
 }
 
+export async function exportQueryResultsXlsx(filePath: string, worksheets: readonly { sheetName?: string; columns: string[]; rows: readonly (readonly XlsxCellValue[])[] }[]): Promise<void> {
+  const { buildXlsxWorkbookMulti } = await import("./xlsxExport");
+  const workbook = buildXlsxWorkbookMulti(worksheets);
+  const fileName = filePath.split(/[\\/]/).pop() || "export.xlsx";
+  const blob = new Blob([new Uint8Array(workbook)], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function exportQueryResultJson(filePath: string, columns: string[], rows: readonly (readonly XlsxCellValue[])[]): Promise<void> {
   const result = await post<{ content: string }>("/api/export/query-result-json", { columns, rows });
   downloadTextFile(filePath, "export.json", result.content, "application/json;charset=utf-8");

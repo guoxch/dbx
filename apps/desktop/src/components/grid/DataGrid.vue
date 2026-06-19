@@ -197,6 +197,7 @@ const props = defineProps<{
   cacheKey?: string;
   onExecuteSql?: (sql: string) => Promise<void>;
   fullExportResult?: (onProgress?: (info: { rowsExported: number; totalRows: number | null }) => void) => Promise<QueryResult | undefined>;
+  allExportResults?: Array<{ sheetName: string; result: QueryResult }>;
   customSaveHandler?: import("@/composables/useDataGridEditor").CustomSaveHandler;
 }>();
 
@@ -4272,10 +4273,16 @@ const {
   copySelectionSqlInList,
   copySelectedRowsTsv,
   exportCsv,
+  exportCurrentPageCsv,
   exportJson,
+  exportCurrentPageJson,
   exportMarkdown,
+  exportCurrentPageMarkdown,
   exportXlsx,
+  exportCurrentPageXlsx,
+  exportAllResultsXlsx,
   exportSql,
+  exportCurrentPageSql,
   copySql,
 } = useDataGridExport({
   columns: visibleColumns,
@@ -4299,6 +4306,7 @@ const {
   selectedRowIds,
   hasRowSelection,
   fullExportResult: props.fullExportResult,
+  allExportResults: computed(() => props.allExportResults),
   exportProgressDialog,
   exportProgressState,
 });
@@ -4310,13 +4318,10 @@ const pageSizeMenuItems = computed(() =>
   })),
 );
 
-const exportMenuItems = computed(() => [
-  { value: "csv", label: t("grid.exportCsv") },
-  { value: "xlsx", label: t("grid.exportXlsx") },
-  { value: "json", label: t("grid.exportJson") },
-  { value: "markdown", label: t("grid.exportMarkdown") },
-  { value: "sql", label: t("grid.exportSql") },
-  ...(isMultiRow.value
+const exportMenuItems = computed(() => {
+  const hasFullResultExport = !!props.fullExportResult;
+  const allResultItems = (props.allExportResults?.length ?? 0) > 1 ? [{ value: "all-results-xlsx", label: t("grid.exportAllResultsXlsx"), separatorBefore: true }] : [];
+  const selectedItems = isMultiRow.value
     ? [
         { value: "selected-csv", label: t("grid.exportSelectedRowsCsv"), separatorBefore: true },
         { value: "selected-xlsx", label: t("grid.exportSelectedRowsXlsx") },
@@ -4324,8 +4329,27 @@ const exportMenuItems = computed(() => [
         { value: "selected-markdown", label: t("grid.exportSelectedRowsMarkdown") },
         { value: "selected-sql", label: t("grid.exportSelectedRowsSql") },
       ]
-    : []),
-]);
+    : [];
+
+  if (!hasFullResultExport) {
+    return [{ value: "csv", label: t("grid.exportCsv") }, { value: "xlsx", label: t("grid.exportXlsx") }, { value: "json", label: t("grid.exportJson") }, { value: "markdown", label: t("grid.exportMarkdown") }, { value: "sql", label: t("grid.exportSql") }, ...allResultItems, ...selectedItems];
+  }
+
+  return [
+    { value: "page-csv", label: t("grid.exportCurrentPageCsv") },
+    { value: "page-xlsx", label: t("grid.exportCurrentPageXlsx") },
+    { value: "page-json", label: t("grid.exportCurrentPageJson") },
+    { value: "page-markdown", label: t("grid.exportCurrentPageMarkdown") },
+    { value: "page-sql", label: t("grid.exportCurrentPageSql") },
+    { value: "csv", label: t("grid.exportCurrentResultCsv"), separatorBefore: true },
+    { value: "xlsx", label: t("grid.exportCurrentResultXlsx") },
+    { value: "json", label: t("grid.exportCurrentResultJson") },
+    { value: "markdown", label: t("grid.exportCurrentResultMarkdown") },
+    { value: "sql", label: t("grid.exportCurrentResultSql") },
+    ...allResultItems,
+    ...selectedItems,
+  ];
+});
 
 function selectPageSizeMenuItem(value: string) {
   changePageSize(Number(value));
@@ -4333,8 +4357,14 @@ function selectPageSizeMenuItem(value: string) {
 
 function selectExportMenuItem(value: string) {
   const actions: Record<string, () => void> = {
+    "page-csv": exportCurrentPageCsv,
+    "page-xlsx": exportCurrentPageXlsx,
+    "page-json": exportCurrentPageJson,
+    "page-markdown": exportCurrentPageMarkdown,
+    "page-sql": exportCurrentPageSql,
     csv: exportCsv,
     xlsx: exportXlsx,
+    "all-results-xlsx": exportAllResultsXlsx,
     json: exportJson,
     markdown: exportMarkdown,
     sql: exportSql,

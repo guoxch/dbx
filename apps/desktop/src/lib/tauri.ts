@@ -1748,6 +1748,15 @@ export async function exportQueryResultXlsx(filePath: string, sheetName: string 
   });
 }
 
+export async function exportQueryResultsXlsx(filePath: string, worksheets: readonly { sheetName?: string; columns: string[]; rows: readonly (readonly XlsxCellValue[])[] }[]): Promise<void> {
+  return invoke("export_query_results_xlsx", {
+    request: {
+      filePath,
+      worksheets,
+    },
+  });
+}
+
 export async function exportQueryResultJson(filePath: string, columns: string[], rows: readonly (readonly XlsxCellValue[])[]): Promise<void> {
   return invoke("export_query_result_json", {
     request: {
