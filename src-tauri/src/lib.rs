@@ -66,8 +66,12 @@ fn should_show_main_window_after_setup() -> bool {
     true
 }
 
-fn should_disable_native_window_decorations(target_os: &str) -> bool {
-    matches!(target_os, "windows")
+fn native_window_decorations_override(target_os: &str) -> Option<bool> {
+    match target_os {
+        "windows" => Some(false),
+        "linux" => Some(true),
+        _ => None,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -218,7 +222,7 @@ pub(crate) fn apply_desktop_settings(app: &tauri::AppHandle, desktop_settings: &
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        should_disable_native_window_decorations, should_hide_window_on_close, should_setup_desktop_tray,
+        native_window_decorations_override, should_hide_window_on_close, should_setup_desktop_tray,
         should_show_main_window_after_setup,
     };
 
@@ -248,10 +252,10 @@ mod tests {
     }
 
     #[test]
-    fn disables_native_window_decorations_only_on_windows() {
-        assert!(should_disable_native_window_decorations("windows"));
-        assert!(!should_disable_native_window_decorations("linux"));
-        assert!(!should_disable_native_window_decorations("macos"));
+    fn overrides_native_window_decorations_for_desktop_platforms() {
+        assert_eq!(native_window_decorations_override("windows"), Some(false));
+        assert_eq!(native_window_decorations_override("linux"), Some(true));
+        assert_eq!(native_window_decorations_override("macos"), None);
     }
 }
 
@@ -348,9 +352,9 @@ pub fn run() {
             commands::mcp_bridge::start(app_handle, state);
             eprintln!("[STARTUP] setup complete in {:?} (total {:?})", setup_start.elapsed(), startup_begin.elapsed());
 
-            if should_disable_native_window_decorations(std::env::consts::OS) {
+            if let Some(decorations) = native_window_decorations_override(std::env::consts::OS) {
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_decorations(false);
+                    let _ = window.set_decorations(decorations);
                 }
             }
             if should_setup_desktop_tray(std::env::consts::OS, desktop_settings.show_tray_icon) {
