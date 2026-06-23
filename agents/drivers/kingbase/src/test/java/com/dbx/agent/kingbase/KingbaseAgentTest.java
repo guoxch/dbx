@@ -54,11 +54,11 @@ class KingbaseAgentTest extends JdbcFakeExecutionBehaviorTest {
     }
 
     @Test
-    void regularListDatabasesUsesPostgresCatalog() {
+    void regularListDatabasesUsesKingbaseCatalog() {
         List<String> sql = new ArrayList<>();
         KingbaseAgent agent = new KingbaseAgent();
         TestSupport.setPrivateConnection(agent, preparedConnection(sql, resultSet(
-            new String[]{"datname"},
+            new String[]{"database_name"},
             new Object[][]{{"app"}, {"analytics"}}
         )));
 
@@ -66,7 +66,7 @@ class KingbaseAgentTest extends JdbcFakeExecutionBehaviorTest {
         Assertions.assertEquals(2, databases.size());
         Assertions.assertEquals("app", databases.get(0).getName());
         Assertions.assertEquals("analytics", databases.get(1).getName());
-        Assertions.assertTrue(sql.get(0).contains("FROM pg_database"), sql.get(0));
+        Assertions.assertTrue(sql.get(0).contains("FROM sys_database"), sql.get(0));
     }
 
     @Test
@@ -79,7 +79,7 @@ class KingbaseAgentTest extends JdbcFakeExecutionBehaviorTest {
         )));
 
         Assertions.assertEquals(Arrays.asList("public", "sys_catalog"), agent.listSchemas());
-        Assertions.assertTrue(sql.get(0).contains("pg_catalog.pg_namespace"), sql.get(0));
+        Assertions.assertTrue(sql.get(0).contains("FROM sys_namespace"), sql.get(0));
         Assertions.assertFalse(sql.get(0).contains("SYS%"), sql.get(0));
     }
 
