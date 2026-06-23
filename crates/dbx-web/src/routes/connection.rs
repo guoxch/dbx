@@ -67,12 +67,13 @@ pub async fn connect_db(
     let config = body.config;
     let app = &state.app;
     let connection_id = config.id.clone();
+    let attempt = app.begin_connection_attempt(&connection_id).await;
 
-    app.remove_connection_pools(&connection_id).await;
+    app.remove_connection_pools_detached(&connection_id).await;
     app.reset_connection_transport_for_config(&connection_id, &config).await;
     app.configs.write().await.insert(connection_id.clone(), config.clone());
 
-    app.get_or_create_pool(&connection_id, None).await.map_err(AppError)?;
+    app.get_or_create_pool_for_connection_attempt(&connection_id, None, attempt).await.map_err(AppError)?;
 
     Ok(Json(connection_id))
 }
@@ -101,7 +102,8 @@ pub async fn disconnect_db(
 ) -> Result<Json<()>, AppError> {
     let app = &state.app;
 
-    app.remove_connection_pools(&body.connection_id).await;
+    app.supersede_connection_attempt(&body.connection_id).await;
+    app.remove_connection_pools_detached(&body.connection_id).await;
     app.nacos_registry.drop_connection(&body.connection_id).await;
     #[cfg(feature = "mq-admin")]
     app.mq_registry.drop_connection(&body.connection_id).await;
@@ -225,7 +227,7 @@ async fn drop_mq_adapters_for_connection_ids(_state: &WebState, _connection_ids:
 
 async fn remove_connection_pools_for_connection_ids(state: &WebState, connection_ids: &[String]) {
     for connection_id in connection_ids {
-        state.app.remove_connection_pools(connection_id).await;
+        state.app.remove_connection_pools_detached(connection_id).await;
     }
 }
 
