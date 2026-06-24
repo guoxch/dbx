@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, defineAsyncComponent, watch, nextTick, onMounted, onUnmounted } from "vue";
+import { safeLocalStorageGet, safeLocalStorageSet } from "@/lib/safeStorage";
 import type { CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { Check, Columns3, Loader2, Search, Bot, GitBranch, BarChart3, TableProperties, ChevronDown, ChevronUp, Inbox, RefreshCcw, Wrench, Toolbox, ListChecks, Database, FileUp, Download, X, Pin } from "@lucide/vue";
@@ -136,7 +137,6 @@ const queryStore = useQueryStore();
 const connectionStore = useConnectionStore();
 const { toast } = useToast();
 const DEFAULT_QUERY_RESULTS_PANE_SIZE = 68;
-const DEFAULT_QUERY_EDITOR_PANE_SIZE = 100 - DEFAULT_QUERY_RESULTS_PANE_SIZE;
 
 onMounted(() => {
   const preload = () => preloadDataGridComponent();
@@ -264,7 +264,17 @@ const hasTabularResult = computed(() => {
 });
 const canShowResultOutput = computed(() => hasTabularResult.value || props.activeTab.isExecuting);
 const resultsPaneOpen = ref(false);
+const resultsPaneSize = ref(Number(safeLocalStorageGet("dbx-results-pane-size")) || DEFAULT_QUERY_RESULTS_PANE_SIZE);
+const editorPaneSize = computed(() => (resultsPaneOpen.value ? 100 - resultsPaneSize.value : 100));
 const queryRunningElapsed = ref(0);
+
+function onResultsResized(payload: { panes: { size: number }[] }) {
+  const resultsPane = payload.panes[1];
+  if (resultsPane?.size != null && resultsPane.size >= 20 && resultsPane.size <= 85) {
+    resultsPaneSize.value = resultsPane.size;
+    safeLocalStorageSet("dbx-results-pane-size", String(resultsPane.size));
+  }
+}
 let queryRunningElapsedTimer: ReturnType<typeof setInterval> | undefined;
 
 function stopQueryRunningElapsedTimer() {
@@ -538,8 +548,8 @@ defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExe
   <div class="flex flex-col flex-1 min-h-0">
     <!-- Query mode: editor + results -->
     <template v-if="activeTab.mode === 'query'">
-      <Splitpanes horizontal class="query-output-splitpanes flex-1 min-h-0 overflow-hidden">
-        <Pane class="min-h-0" :size="resultsPaneOpen ? DEFAULT_QUERY_EDITOR_PANE_SIZE : 100" :min-size="resultsPaneOpen ? 15 : 100">
+      <Splitpanes horizontal class="query-output-splitpanes flex-1 min-h-0 overflow-hidden" @resized="onResultsResized">
+        <Pane class="min-h-0" :size="editorPaneSize" :min-size="resultsPaneOpen ? 15 : 100">
           <div class="h-full flex flex-col relative">
             <QueryEditor
               ref="queryEditorRef"
@@ -576,7 +586,7 @@ defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExe
             </Button>
           </div>
         </Pane>
-        <Pane v-if="resultsPaneOpen" class="min-h-0" :size="DEFAULT_QUERY_RESULTS_PANE_SIZE" :min-size="20">
+        <Pane v-if="resultsPaneOpen" class="min-h-0" :size="resultsPaneSize" :min-size="20">
           <div class="h-full flex flex-col">
             <div v-if="hasQueryOutput" class="flex h-10 shrink-0 items-center gap-1 border-b bg-muted/20 px-2">
               <div class="flex shrink-0 items-center gap-1">

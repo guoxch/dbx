@@ -1512,7 +1512,7 @@ mod tests {
 
     #[test]
     fn postgres_like_agent_metadata_fallback_targets_pg_compatible_agents() {
-        assert!(is_agent_postgres_metadata_fallback_config(&test_connection_config(DatabaseType::Kingbase)));
+        assert!(!is_agent_postgres_metadata_fallback_config(&test_connection_config(DatabaseType::Kingbase)));
         assert!(is_agent_postgres_metadata_fallback_config(&test_connection_config(DatabaseType::Highgo)));
         assert!(is_agent_postgres_metadata_fallback_config(&test_connection_config(DatabaseType::Vastbase)));
         assert!(!is_agent_postgres_metadata_fallback_config(&test_connection_config(DatabaseType::Postgres)));
@@ -2127,7 +2127,9 @@ fn filter_completion_objects(objects: Vec<db::ObjectInfo>) -> Vec<db::ObjectInfo
 }
 
 fn is_agent_postgres_metadata_fallback_config(config: &ConnectionConfig) -> bool {
-    matches!(config.db_type, DatabaseType::Kingbase | DatabaseType::Highgo | DatabaseType::Vastbase)
+    // Kingbase has dedicated agent metadata SQL and may carry JDBC-specific URL
+    // parameters that the native PostgreSQL driver cannot parse.
+    matches!(config.db_type, DatabaseType::Highgo | DatabaseType::Vastbase)
 }
 
 async fn native_postgres_metadata_pool(
