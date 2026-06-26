@@ -1092,6 +1092,13 @@ export interface UpdateInfo {
   release_notes: string;
 }
 
+export type UpdateDownloadSource = "github" | "cnb";
+
+export interface UpdateDownloadProgress {
+  downloaded: number;
+  total: number | null;
+}
+
 export interface McpServerStatus {
   installed: boolean;
   npm_available: boolean;
@@ -1119,6 +1126,10 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 
 export async function getSystemProxyUrl(): Promise<string | null> {
   return invoke("get_system_proxy_url");
+}
+
+export async function downloadAndInstallUpdate(source: UpdateDownloadSource, latestVersion?: string): Promise<void> {
+  return invoke("download_and_install_update", { source, latestVersion });
 }
 
 export async function getAppVersion(): Promise<string> {

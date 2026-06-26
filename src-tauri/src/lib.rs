@@ -752,6 +752,7 @@ pub fn run() {
             commands::mcp::install_mcp_server,
             commands::update::check_for_updates,
             commands::update::get_system_proxy_url,
+            commands::update::download_and_install_update,
             commands::transfer::start_transfer,
             commands::transfer::cancel_transfer,
             commands::database_export::export_database_sql,

@@ -34,6 +34,7 @@ import {
   type DesktopIconTheme,
   type InterfaceLayout,
   type DisconnectTabHandlingMode,
+  type UpdateDownloadSource,
   type CustomThemeColors,
   type CustomTheme,
 } from "@/stores/settingsStore";
@@ -225,6 +226,7 @@ const editExportBatchSize = ref(settingsStore.editorSettings.exportBatchSize);
 const editExportRowLimitEnabled = ref(settingsStore.editorSettings.exportRowLimitEnabled);
 const editExportRowLimit = ref(settingsStore.editorSettings.exportRowLimit);
 const editQueryExportKeysetOptimizationEnabled = ref(settingsStore.editorSettings.queryExportKeysetOptimizationEnabled);
+const editUpdateDownloadSource = ref<UpdateDownloadSource>(settingsStore.editorSettings.updateDownloadSource);
 const editToolbarItems = ref({ ...settingsStore.editorSettings.toolbarItems });
 const redisScanPageSizeOptions = [200, 1000, 5000, 10000];
 const systemFonts = ref<string[]>([]);
@@ -494,6 +496,7 @@ watch(
       editExportRowLimitEnabled.value = settingsStore.editorSettings.exportRowLimitEnabled;
       editExportRowLimit.value = settingsStore.editorSettings.exportRowLimit;
       editQueryExportKeysetOptimizationEnabled.value = settingsStore.editorSettings.queryExportKeysetOptimizationEnabled;
+      editUpdateDownloadSource.value = settingsStore.editorSettings.updateDownloadSource;
       editToolbarItems.value = { ...settingsStore.editorSettings.toolbarItems };
       editSnippets.value = settingsStore.editorSettings.snippets.map((s) => ({ ...s }));
     }
@@ -555,6 +558,7 @@ function hasChanges(): boolean {
     editExportRowLimitEnabled.value !== settingsStore.editorSettings.exportRowLimitEnabled ||
     editExportRowLimit.value !== settingsStore.editorSettings.exportRowLimit ||
     editQueryExportKeysetOptimizationEnabled.value !== settingsStore.editorSettings.queryExportKeysetOptimizationEnabled ||
+    editUpdateDownloadSource.value !== settingsStore.editorSettings.updateDownloadSource ||
     JSON.stringify(editToolbarItems.value) !== JSON.stringify(settingsStore.editorSettings.toolbarItems) ||
     JSON.stringify(normalizeSidebarHiddenTablePrefixes(editSidebarHiddenTablePrefixes.value)) !== JSON.stringify(settingsStore.editorSettings.sidebarHiddenTablePrefixes) ||
     JSON.stringify(editSnippets.value) !== JSON.stringify(settingsStore.editorSettings.snippets)
@@ -600,6 +604,7 @@ async function persistSettings() {
     exportRowLimitEnabled: editExportRowLimitEnabled.value,
     exportRowLimit: editExportRowLimit.value,
     queryExportKeysetOptimizationEnabled: editQueryExportKeysetOptimizationEnabled.value,
+    updateDownloadSource: editUpdateDownloadSource.value,
     toolbarItems: { ...editToolbarItems.value },
     snippets: editSnippets.value,
   });
@@ -680,53 +685,9 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editShortcuts.value = normalizeShortcutSettings(DEFAULT_EDITOR_SETTINGS.shortcuts);
   } else if (tab === "snippets") {
     editSnippets.value = DEFAULT_SQL_SNIPPETS.map((s) => ({ ...s }));
+  } else if (tab === "about") {
+    editUpdateDownloadSource.value = DEFAULT_EDITOR_SETTINGS.updateDownloadSource;
   }
-}
-
-function resetAllDefaults() {
-  editFontFamily.value = DEFAULT_EDITOR_SETTINGS.fontFamily;
-  editFontSize.value = DEFAULT_EDITOR_SETTINGS.fontSize;
-  editUiScale.value = DEFAULT_EDITOR_SETTINGS.uiScale;
-  editTheme.value = DEFAULT_EDITOR_SETTINGS.theme;
-  editCustomThemes.value = [...DEFAULT_EDITOR_SETTINGS.customThemes];
-  editActiveCustomThemeId.value = DEFAULT_EDITOR_SETTINGS.activeCustomThemeId;
-  editExecuteMode.value = DEFAULT_EDITOR_SETTINGS.executeMode;
-  editShowExecutionTargetPicker.value = DEFAULT_EDITOR_SETTINGS.showExecutionTargetPicker;
-  editAutoAliasTables.value = DEFAULT_EDITOR_SETTINGS.autoAliasTables;
-  editWordWrap.value = DEFAULT_EDITOR_SETTINGS.wordWrap;
-  editConfirmDangerousSqlExecution.value = DEFAULT_EDITOR_SETTINGS.confirmDangerousSqlExecution;
-  editAppLayout.value = DEFAULT_EDITOR_SETTINGS.appLayout;
-  editShowTrayIcon.value = DEFAULT_DESKTOP_SETTINGS.show_tray_icon;
-  editQuitOnClose.value = DEFAULT_DESKTOP_SETTINGS.quit_on_close;
-  desktopCloseBehaviorResetPending.value = true;
-  editIconTheme.value = DEFAULT_DESKTOP_SETTINGS.icon_theme;
-  editDebugLoggingEnabled.value = DEFAULT_DESKTOP_SETTINGS.debug_logging_enabled;
-  editSidebarTablePageSize.value = DEFAULT_SIDEBAR_TABLE_PAGE_SIZE;
-  editShowColumnCommentsInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnCommentsInHeader;
-  editShowColumnTypesInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnTypesInHeader;
-  editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
-  editInfiniteScroll.value = DEFAULT_EDITOR_SETTINGS.infiniteScroll;
-  editInfiniteScrollMaxRows.value = DEFAULT_EDITOR_SETTINGS.infiniteScrollMaxRows;
-  editTableColumnTemplateRows.value = tableColumnTemplateRowsFromSettings(DEFAULT_EDITOR_SETTINGS.tableColumnTemplateFields);
-  editRedisScanPageSize.value = DEFAULT_EDITOR_SETTINGS.redisScanPageSize;
-  editShortcuts.value = normalizeShortcutSettings(DEFAULT_EDITOR_SETTINGS.shortcuts);
-  editSqlFormatter.value = normalizeSqlFormatterSettings(DEFAULT_EDITOR_SETTINGS.sqlFormatter);
-  sqlFormatterConfigValid.value = true;
-  editSidebarActivation.value = DEFAULT_EDITOR_SETTINGS.sidebarActivation;
-  editSidebarObjectDisplay.value = DEFAULT_EDITOR_SETTINGS.sidebarObjectDisplay;
-  editAutoSelectActiveSidebarNode.value = DEFAULT_EDITOR_SETTINGS.autoSelectActiveSidebarNode;
-  editDisconnectTabHandlingMode.value = DEFAULT_EDITOR_SETTINGS.disconnectTabHandlingMode;
-  editReuseDataTab.value = DEFAULT_EDITOR_SETTINGS.reuseDataTab;
-  editUpdateNotificationsEnabled.value = DEFAULT_EDITOR_SETTINGS.updateNotificationsEnabled;
-  editSidebarHideTableComments.value = DEFAULT_EDITOR_SETTINGS.sidebarHideTableComments;
-  editSidebarAllowHorizontalScroll.value = DEFAULT_EDITOR_SETTINGS.sidebarAllowHorizontalScroll;
-  editSidebarHiddenTablePrefixes.value = DEFAULT_EDITOR_SETTINGS.sidebarHiddenTablePrefixes.join("\n");
-  editExportBatchSize.value = DEFAULT_EDITOR_SETTINGS.exportBatchSize;
-  editExportRowLimitEnabled.value = DEFAULT_EDITOR_SETTINGS.exportRowLimitEnabled;
-  editExportRowLimit.value = DEFAULT_EDITOR_SETTINGS.exportRowLimit;
-  editQueryExportKeysetOptimizationEnabled.value = DEFAULT_EDITOR_SETTINGS.queryExportKeysetOptimizationEnabled;
-  editToolbarItems.value = { ...DEFAULT_EDITOR_SETTINGS.toolbarItems };
-  editSnippets.value = DEFAULT_SQL_SNIPPETS.map((s) => ({ ...s }));
 }
 
 function addTableColumnTemplateRow() {
@@ -915,6 +876,10 @@ function onRedisScanPageSizeChange(v: any) {
   if (redisScanPageSizeOptions.includes(value)) editRedisScanPageSize.value = value;
 }
 
+function onUpdateDownloadSourceChange(v: any) {
+  if (v === "github" || v === "cnb") editUpdateDownloadSource.value = v;
+}
+
 function setSidebarObjectDisplay(value: "grouped" | "simple") {
   editSidebarObjectDisplay.value = value;
 }
@@ -1023,7 +988,7 @@ const settingsCategoryNav = computed<{ value: SettingsCategory; label: string }[
   ...(isWeb ? [{ value: "security" as const, label: t("settings.securityTab") }] : []),
   { value: "about", label: t("settings.aboutTab") },
 ]);
-const settingsTabsWithApplyFooter = new Set<SettingsCategory>(["editor", "formatter", "appearance", "navigation", "data", "redis", "shortcuts", "snippets"]);
+const settingsTabsWithApplyFooter = new Set<SettingsCategory>(["editor", "formatter", "appearance", "navigation", "data", "redis", "shortcuts", "snippets", "about"]);
 
 function hasSettingsApplyFooter(value: SettingsCategory): boolean {
   return settingsTabsWithApplyFooter.has(value);
@@ -3350,6 +3315,24 @@ watch(
                 </div>
               </div>
 
+              <div class="rounded-lg border p-4">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="min-w-0 space-y-1">
+                    <Label>{{ t("settings.updateDownloadSource") }}</Label>
+                    <p class="text-sm text-muted-foreground">{{ t("settings.updateDownloadSourceDescription") }}</p>
+                  </div>
+                  <Select :model-value="editUpdateDownloadSource" @update:model-value="onUpdateDownloadSourceChange">
+                    <SelectTrigger class="h-9 w-full sm:w-[180px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="github">{{ t("settings.updateDownloadSourceGithub") }}</SelectItem>
+                      <SelectItem value="cnb">{{ t("settings.updateDownloadSourceCnb") }}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
               <div class="grid gap-3 sm:grid-cols-2">
                 <button type="button" class="rounded-lg border p-4 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="openExternalUrl('https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=1087880322')">
                   <div class="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -3512,16 +3495,6 @@ watch(
             </Button>
             <Button :disabled="changingPassword || !oldPassword || !newPassword || !confirmNewPassword" @click="changePassword">
               {{ t("auth.changePassword") }}
-            </Button>
-          </DialogFooter>
-
-          <DialogFooter v-else-if="activeSettingsTab === 'about'" class="mx-0 mb-0 flex-row flex-wrap items-center justify-end gap-2 rounded-none border-t border-border/60 bg-transparent px-0 pb-0 pt-3 sm:flex-row sm:gap-2 [&>button]:w-auto [&>button]:shrink-0">
-            <Button variant="outline" @click="resetAllDefaults">
-              {{ t("settings.resetAllDefaults") }}
-            </Button>
-            <div class="flex-1" />
-            <Button variant="outline" @click="emit('update:open', false)">
-              {{ t("common.close") }}
             </Button>
           </DialogFooter>
         </div>

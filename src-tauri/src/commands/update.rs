@@ -1,4 +1,71 @@
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+
 pub use dbx_core::update::UpdateInfo;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+use tauri_plugin_updater::UpdaterExt;
+
+const GITHUB_UPDATE_ENDPOINT: &str = "https://github.com/t8y2/dbx/releases/latest/download/latest.json";
+const CNB_RELEASE_DOWNLOAD_PREFIX: &str = "https://cnb.cool/dbxio.com/dbx/-/releases/download/";
+const GITHUB_RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/t8y2/dbx/releases/download/";
+const UPDATE_DOWNLOAD_PROGRESS_EVENT: &str = "update-download-progress";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateDownloadSource {
+    Github,
+    Cnb,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct UpdateDownloadProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+}
+
+impl UpdateDownloadSource {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Github => "github",
+            Self::Cnb => "cnb",
+        }
+    }
+
+    fn endpoint(&self, latest_version: Option<&str>) -> Result<String, String> {
+        match self {
+            Self::Github => Ok(GITHUB_UPDATE_ENDPOINT.to_string()),
+            Self::Cnb => {
+                let version =
+                    latest_version.ok_or_else(|| "Latest version is required for CNB updates.".to_string())?;
+                Ok(format!("{CNB_RELEASE_DOWNLOAD_PREFIX}{}/latest.json", tag_version(version)))
+            }
+        }
+    }
+
+    fn rewrite_download_url(&self, url: &str) -> Result<Option<String>, String> {
+        if !matches!(self, Self::Cnb) {
+            return Ok(None);
+        }
+
+        let rewritten = url
+            .strip_prefix(GITHUB_RELEASE_DOWNLOAD_PREFIX)
+            .map(|path| format!("{CNB_RELEASE_DOWNLOAD_PREFIX}{path}"))
+            .ok_or_else(|| format!("Unsupported update download URL for CNB source: {url}"))?;
+        Ok(Some(rewritten))
+    }
+}
+
+fn tag_version(version: &str) -> String {
+    let version = version.trim();
+    if version.starts_with('v') {
+        version.to_string()
+    } else {
+        format!("v{version}")
+    }
+}
 
 #[tauri::command]
 pub async fn check_for_updates() -> Result<UpdateInfo, String> {
@@ -12,4 +79,84 @@ pub async fn check_for_updates() -> Result<UpdateInfo, String> {
 #[tauri::command]
 pub async fn get_system_proxy_url() -> Option<String> {
     tauri::async_runtime::spawn_blocking(dbx_core::update::system_proxy_url).await.ok().flatten()
+}
+
+#[tauri::command]
+pub async fn download_and_install_update(
+    app: AppHandle,
+    source: UpdateDownloadSource,
+    latest_version: Option<String>,
+) -> Result<(), String> {
+    if crate::data_dir::is_portable_mode() {
+        return Err("Portable builds cannot use the in-app installer.".to_string());
+    }
+
+    let endpoint = source.endpoint(latest_version.as_deref())?;
+    println!("[DBX updater] checking from {} endpoint: {}", source.label(), endpoint);
+    let endpoint = endpoint.parse().map_err(|e| format!("Invalid update endpoint: {e}"))?;
+    let mut builder = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|e| format!("Failed to configure updater endpoint: {e}"))?;
+
+    if let Some(proxy_url) = dbx_core::update::system_proxy_url() {
+        let proxy = proxy_url.parse().map_err(|e| format!("Invalid system proxy URL: {e}"))?;
+        builder = builder.proxy(proxy);
+    }
+
+    let updater = builder.build().map_err(|e| format!("Failed to create updater: {e}"))?;
+    let update = updater.check().await.map_err(|e| format!("Failed to check updates: {e}"))?;
+    let Some(mut update) = update else {
+        return Err("No update available.".to_string());
+    };
+    if let Some(download_url) = source.rewrite_download_url(update.download_url.as_str())? {
+        update.download_url = download_url.parse().map_err(|e| format!("Invalid CNB update download URL: {e}"))?;
+    }
+    println!("[DBX updater] downloading from {} URL: {}", source.label(), update.download_url);
+
+    let downloaded = Arc::new(AtomicU64::new(0));
+    let finished_downloaded = Arc::clone(&downloaded);
+    update
+        .download_and_install(
+            |chunk_len, total| {
+                let downloaded =
+                    downloaded.fetch_add(chunk_len as u64, Ordering::Relaxed).saturating_add(chunk_len as u64);
+                let _ = app.emit(UPDATE_DOWNLOAD_PROGRESS_EVENT, UpdateDownloadProgress { downloaded, total });
+            },
+            || {
+                let downloaded = finished_downloaded.load(Ordering::Relaxed);
+                let _ = app.emit(
+                    UPDATE_DOWNLOAD_PROGRESS_EVENT,
+                    UpdateDownloadProgress { downloaded, total: Some(downloaded) },
+                );
+            },
+        )
+        .await
+        .map_err(|e| format!("Failed to download and install update: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tag_version, UpdateDownloadSource, CNB_RELEASE_DOWNLOAD_PREFIX};
+
+    #[test]
+    fn normalizes_update_tag_versions() {
+        assert_eq!(tag_version("0.5.39"), "v0.5.39");
+        assert_eq!(tag_version("v0.5.39"), "v0.5.39");
+    }
+
+    #[test]
+    fn builds_cnb_update_endpoint_for_tag() {
+        let endpoint = UpdateDownloadSource::Cnb.endpoint(Some("0.5.39")).unwrap();
+        assert_eq!(endpoint, format!("{CNB_RELEASE_DOWNLOAD_PREFIX}v0.5.39/latest.json"));
+    }
+
+    #[test]
+    fn rewrites_github_asset_url_to_cnb() {
+        let download_url = UpdateDownloadSource::Cnb
+            .rewrite_download_url("https://github.com/t8y2/dbx/releases/download/v0.5.39/DBX_0.5.39_aarch64.dmg")
+            .unwrap()
+            .unwrap();
+        assert_eq!(download_url, "https://cnb.cool/dbxio.com/dbx/-/releases/download/v0.5.39/DBX_0.5.39_aarch64.dmg");
+    }
 }
