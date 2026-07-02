@@ -1844,6 +1844,7 @@ export default withEnglishFallback({
     memberDetail: "Detalle del miembro",
     viewMember: "Ver valor completo",
     copyMember: "Copiar miembro",
+    copyKeyName: "Copiar nombre de clave",
     copied: "Copiado",
     editMember: "Editar",
     jsonView: "Vista JSON",

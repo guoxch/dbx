@@ -1841,6 +1841,7 @@ export default {
     memberDetail: "Member detail",
     viewMember: "View full value",
     copyMember: "Copy member",
+    copyKeyName: "Copy key name",
     copied: "Copied",
     copyInsertStatement: "Copy Insert Statement",
     copyInsertStatementBinary: "Cannot generate insert statement for binary data",

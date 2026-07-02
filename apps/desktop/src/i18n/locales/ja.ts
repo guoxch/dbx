@@ -1842,6 +1842,7 @@ export default withEnglishFallback({
     memberDetail: "メンバー詳細",
     viewMember: "完全な値を表示",
     copyMember: "メンバーをコピー",
+    copyKeyName: "キー名をコピー",
     copied: "コピーしました",
     copyInsertStatement: "INSERT文をコピー",
     copyInsertStatementBinary: "バイナリデータのINSERT文は生成できません",

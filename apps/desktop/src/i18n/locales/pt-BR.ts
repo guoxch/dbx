@@ -1843,6 +1843,7 @@ export default withEnglishFallback({
     memberDetail: "Detalhe do membro",
     viewMember: "Ver valor completo",
     copyMember: "Copiar membro",
+    copyKeyName: "Copiar nome da chave",
     copied: "Copiado",
     copyInsertStatement: "Copiar instrução de inserção",
     copyInsertStatementBinary: "Não é possível gerar instrução de inserção para dados binários",
