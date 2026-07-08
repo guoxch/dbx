@@ -1882,7 +1882,7 @@ mod tests {
     #[test]
     fn sqlserver_connect_uses_named_instance_resolution() {
         let source = include_str!("sqlserver.rs");
-        let try_connect = source.split("async fn try_connect").nth(1).unwrap();
+        let try_connect = source.split("\nasync fn try_connect(").nth(1).unwrap();
         let try_connect = try_connect.split("fn row_to_json").next().unwrap();
         assert!(try_connect.contains("connect_named(&config)"));
     }
