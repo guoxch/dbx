@@ -168,6 +168,22 @@ function annotateQueryResultSource(result: QueryResult, sourceStatement: string,
   return result;
 }
 
+const ELASTICSEARCH_REST_REQUEST = /^(?:GET|POST|PUT|DELETE|HEAD)\s+\S+/i;
+
+function elasticsearchRestRequestRanges(sql: string, databaseType?: DatabaseType) {
+  if (databaseType !== "elasticsearch") return [];
+  const requests = splitSqlStatementRanges(sql, databaseType);
+  return requests.length > 0 && requests.every((request) => ELASTICSEARCH_REST_REQUEST.test(request.sql)) ? requests : [];
+}
+
+function elasticsearchHttpErrorStatus(result: QueryResult): number | undefined {
+  const statusIndex = result.columns.findIndex((column) => column.toLowerCase() === "status");
+  if (statusIndex < 0) return undefined;
+  const value = result.rows[0]?.[statusIndex];
+  const status = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isInteger(status) && status >= 400 ? status : undefined;
+}
+
 function displayedQueryMetadataSql(tab: QueryTab, fallbackSql: string): string {
   return tab.results?.length ? (tab.result?.sourceStatement ?? fallbackSql) : fallbackSql;
 }
@@ -3112,6 +3128,59 @@ export const useQueryStore = defineStore("query", () => {
           current.resultSortedSql = options?.resultSortedSql;
           syncDisplayedResultRun(current, current.resultBaseSql ?? options?.resultBaseSql ?? sql);
           if (current.database !== currentDatabase) current.database = currentDatabase;
+        }
+        return;
+      }
+
+      const elasticsearchRequests = elasticsearchRestRequestRanges(sqlToExecute, effectiveDbType);
+      if (elasticsearchRequests.length > 0) {
+        console.info("[DBX][executeTabSql:elasticsearch-rest-batch:start]", {
+          traceId,
+          requestCount: elasticsearchRequests.length,
+          sql,
+        });
+        const allResults: QueryResult[] = [];
+        const continueOnError = settingsStore.editorSettings.continueOnErrorOnBatch;
+        for (const request of elasticsearchRequests) {
+          const current = tabs.value.find((item) => item.id === id);
+          if (current?.executionId !== executionId) break;
+          const sourceRange = options?.sourceOffset === undefined ? undefined : { from: options.sourceOffset + request.from, to: options.sourceOffset + request.to };
+          try {
+            const result = await api.executeQuery(tab.connectionId, executionDatabase, request.sql, undefined, executionId, {
+              timeoutSecs: queryTimeoutSecs,
+            });
+            allResults.push(markQueryResultRowsRaw(annotateQueryResultSource(result, request.sql, tab.database || conn?.database, effectiveDbType, sourceRange)));
+            if (elasticsearchHttpErrorStatus(result) !== undefined && !continueOnError) break;
+          } catch (error) {
+            const latest = tabs.value.find((item) => item.id === id);
+            if (latest?.executionId !== executionId) break;
+            allResults.push(annotateQueryResultSource(toErrorResult(error), request.sql, tab.database || conn?.database, effectiveDbType, sourceRange));
+            if (!continueOnError) break;
+          }
+        }
+
+        console.info("[DBX][executeTabSql:elasticsearch-rest-batch:done]", {
+          traceId,
+          requestCount: elasticsearchRequests.length,
+          resultCount: allResults.length,
+          elapsed: elapsed(),
+        });
+        const current = tabs.value.find((item) => item.id === id);
+        if (current?.executionId === executionId && allResults.length > 0) {
+          const errorResultIndex = allResults.findIndex((result) => result.columns.includes("Error") || elasticsearchHttpErrorStatus(result) !== undefined);
+          const resultIndex = errorResultIndex >= 0 ? errorResultIndex : 0;
+          current.results = allResults.length > 1 ? allResults : undefined;
+          current.activeResultIndex = allResults.length > 1 ? resultIndex : undefined;
+          current.result = allResults[resultIndex];
+          touchResult(current);
+          current.queryAnalysis = undefined;
+          current.querySourceColumns = undefined;
+          current.queryEditabilityReason = undefined;
+          current.mongoEditTarget = undefined;
+          current.tableMeta = undefined;
+          current.resultBaseSql = options?.resultBaseSql ?? sql;
+          current.resultSortedSql = undefined;
+          syncDisplayedResultRun(current, current.resultBaseSql);
         }
         return;
       }
