@@ -677,13 +677,16 @@ func TestListDatabasesSQLUsesUserDictionaryInsteadOfObjectDictionary(t *testing.
 	sqlText := strings.ToUpper(oracleListDatabasesSQL)
 
 	if !strings.Contains(sqlText, "ALL_USERS") {
-		t.Fatalf("schema listing should query ALL_USERS, got: %s", oracleListDatabasesSQL)
+		t.Fatalf("database listing should query ALL_USERS, got: %s", oracleListDatabasesSQL)
 	}
 	if strings.Contains(sqlText, "ALL_TABLES") || strings.Contains(sqlText, "ALL_VIEWS") {
-		t.Fatalf("schema listing should not scan object dictionaries, got: %s", oracleListDatabasesSQL)
+		t.Fatalf("database listing should not scan object dictionaries, got: %s", oracleListDatabasesSQL)
 	}
 	if strings.Contains(sqlText, "'DIP'") {
-		t.Fatalf("schema listing should not hide an existing user named DIP, got: %s", oracleListDatabasesSQL)
+		t.Fatalf("database listing should not hide an existing user named DIP, got: %s", oracleListDatabasesSQL)
+	}
+	if !strings.Contains(sqlText, "'SYS','SYSTEM'") || !strings.Contains(sqlText, "USERNAME NOT LIKE 'APEX_%'") {
+		t.Fatalf("database listing should retain system schema filtering, got: %s", oracleListDatabasesSQL)
 	}
 }
 
@@ -692,16 +695,54 @@ func TestListDatabasesSQLCanApplyVisibleSchemaFilter(t *testing.T) {
 	upperSQL := strings.ToUpper(sqlText)
 
 	if !strings.Contains(upperSQL, "ALL_USERS") {
-		t.Fatalf("schema listing should query ALL_USERS, got: %s", sqlText)
+		t.Fatalf("database listing should query ALL_USERS, got: %s", sqlText)
 	}
 	if !strings.Contains(upperSQL, "USERNAME IN (:1,:2)") {
-		t.Fatalf("schema listing should apply visible schema filter, got: %s", sqlText)
+		t.Fatalf("database listing should apply visible schema filter, got: %s", sqlText)
 	}
 	if len(args) != 2 || args[0] != "APP" || args[1] != "REPORTING" {
 		t.Fatalf("visible schema args were not preserved: %#v", args)
 	}
 	if strings.Contains(upperSQL, "ALL_TABLES") || strings.Contains(upperSQL, "ALL_VIEWS") {
-		t.Fatalf("schema listing should not scan object dictionaries, got: %s", sqlText)
+		t.Fatalf("database listing should not scan object dictionaries, got: %s", sqlText)
+	}
+	if !strings.Contains(upperSQL, "'SYS','SYSTEM'") {
+		t.Fatalf("database visible-schema filtering should retain system exclusions, got: %s", sqlText)
+	}
+}
+
+func TestListSchemasSQLIncludesSystemUsersWithoutSynthesizingPublic(t *testing.T) {
+	sqlText := strings.ToUpper(oracleListSchemasSQL)
+
+	if !strings.Contains(sqlText, "FROM ALL_USERS") {
+		t.Fatalf("schema listing should query ALL_USERS, got: %s", oracleListSchemasSQL)
+	}
+	if strings.Contains(sqlText, "NOT IN") || strings.Contains(sqlText, "'SYS'") || strings.Contains(sqlText, "'SYSTEM'") {
+		t.Fatalf("schema listing should not hard-exclude SYS or SYSTEM, got: %s", oracleListSchemasSQL)
+	}
+	if strings.Contains(sqlText, "PUBLIC") || strings.Contains(sqlText, "UNION") {
+		t.Fatalf("schema listing should not synthesize PUBLIC, got: %s", oracleListSchemasSQL)
+	}
+	if !strings.Contains(sqlText, "CURRENT_SCHEMA') THEN 0") || !strings.Contains(sqlText, "SESSION_USER') THEN 1") {
+		t.Fatalf("schema listing should prioritize CURRENT_SCHEMA then SESSION_USER, got: %s", oracleListSchemasSQL)
+	}
+}
+
+func TestListSchemasSQLCanApplyVisibleSchemaFilter(t *testing.T) {
+	sqlText, args := oracleListSchemasSQLWithVisibleSchemas([]string{"SYS", "SYSTEM"})
+	upperSQL := strings.ToUpper(sqlText)
+
+	if !strings.Contains(upperSQL, "USERNAME IN (:1,:2)") {
+		t.Fatalf("schema listing should parameterize visible schemas, got: %s", sqlText)
+	}
+	if len(args) != 2 || args[0] != "SYS" || args[1] != "SYSTEM" {
+		t.Fatalf("visible schema args were not preserved: %#v", args)
+	}
+	if strings.Contains(upperSQL, "NOT IN") || strings.Contains(upperSQL, "'SYS'") || strings.Contains(upperSQL, "'SYSTEM'") {
+		t.Fatalf("visible schema query should not hard-exclude SYS or SYSTEM, got: %s", sqlText)
+	}
+	if !strings.Contains(upperSQL, "CURRENT_SCHEMA') THEN 0") || !strings.Contains(upperSQL, "SESSION_USER') THEN 1") {
+		t.Fatalf("visible schema query should preserve schema ordering, got: %s", sqlText)
 	}
 }
 
